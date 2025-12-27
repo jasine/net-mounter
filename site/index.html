@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetMounter - Seamless Network Mounting for macOS</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="background-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <nav class="glass-nav">
+        <div class="logo">
+            <img src="assets/logo.png" alt="NetMounter Logo">
+            <span>NetMounter</span>
+        </div>
+        <div class="nav-links">
+            <button id="lang-toggle" class="glass-button small">中文</button>
+        </div>
+    </nav>
+
+    <main>
+        <section class="hero">
+            <div class="hero-content">
+                <h1 id="hero-title" data-i18n="heroTitle">Seamless Network Mounting</h1>
+                <p id="hero-subtitle" data-i18n="heroSubtitle">The lightweight, menu-bar essential for macOS. Auto-mount
+                    SMB shares effortlessly.</p>
+                <div class="cta-group">
+                    <a href="#" class="glass-button primary" id="download-btn" data-i18n="downloadBtn">Download for
+                        macOS</a>
+                    <span class="version-info" id="version-info" data-i18n="versionInfo">v1.0.0 • macOS 14+</span>
+                </div>
+            </div>
+            <div class="hero-image">
+                <div class="glass-card mockup">
+                    <!-- CSS Mockup of the App Interface -->
+                    <div class="mockup-header">
+                        <div class="traffic-lights">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <div class="mockup-title">Servers</div>
+                    </div>
+                    <div class="mockup-body">
+                        <div class="mockup-row">
+                            <div class="mockup-icon green"></div>
+                            <div class="mockup-text">
+                                <div class="mockup-row-title">Design Server</div>
+                                <div class="mockup-row-subtitle">smb://192.168.1.10/design</div>
+                            </div>
+                            <div class="mockup-actions">
+                                <div class="action-btn"></div>
+                                <div class="action-btn"></div>
+                            </div>
+                        </div>
+                        <div class="mockup-row">
+                            <div class="mockup-icon orange"></div>
+                            <div class="mockup-text">
+                                <div class="mockup-row-title">Media Archive</div>
+                                <div class="mockup-row-subtitle">smb://nas.local/media</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="features">
+            <div class="feature-card glass-card">
+                <div class="icon">⚡️</div>
+                <h3 data-i18n="feature1Title">Auto-Mount</h3>
+                <p data-i18n="feature1Desc">Automatically detects your network environment and mounts the right shares
+                    instantly.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🔒</div>
+                <h3 data-i18n="feature2Title">Secure & Native</h3>
+                <p data-i18n="feature2Desc">Built with native Swift APIs. Passwords securely stored in macOS Keychain.
+                </p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">💎</div>
+                <h3 data-i18n="feature3Title">Liquid Design</h3>
+                <p data-i18n="feature3Desc">A stunning, modern interface designed for macOS Sonoma and beyond.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 NetMounter. <span data-i18n="footerRights">All rights reserved.</span></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

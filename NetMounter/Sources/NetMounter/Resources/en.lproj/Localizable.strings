@@ -1,0 +1,19 @@
+/* English */
+"Servers" = "Servers";
+"Alias" = "Alias";
+"Protocol" = "Protocol";
+"Hostname / IP" = "Hostname / IP";
+"Share Path" = "Share Path";
+"Username" = "Username";
+"Password" = "Password";
+"Test Connection" = "Test Connection";
+"Save" = "Save";
+"Cancel" = "Cancel";
+"Authentication" = "Authentication";
+"Server Details" = "Server Details";
+"Connection Successful" = "Connection Successful";
+"Connection Failed" = "Connection Failed";
+"Auto-Mount" = "Auto-Mount";
+"Auto-mount rules can be configured in settings." = "Auto-mount rules can be configured in settings.";
+"Settings..." = "Settings...";
+"Quit" = "Quit";
