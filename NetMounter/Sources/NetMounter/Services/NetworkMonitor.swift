@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CoreWLAN
+import Combine
 
 class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
@@ -10,56 +11,76 @@ class NetworkMonitor: ObservableObject {
     
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "NetworkMonitor")
+    private var cancellables = Set<AnyCancellable>()
+    private let pathSubject = PassthroughSubject<NWPath, Never>()
     
     init() {
         startMonitoring()
     }
     
     func startMonitoring() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            DispatchQueue.main.async {
-                self?.currentPath = path
-                self?.updateFingerprint(path: path)
+        // Setup the pipeline:
+        // 1. Receive path update
+        // 2. Debounce to avoid rapid fluctuations (e.g. signal changes)
+        // 3. Process on background queue (get SSID, etc.)
+        // 4. Update Main properties only if changed
+        
+        pathSubject
+            .debounce(for: .milliseconds(500), scheduler: queue)
+            .sink { [weak self] path in
+                self?.processPathUpdate(path)
             }
+            .store(in: &cancellables)
+            
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.pathSubject.send(path)
         }
         monitor.start(queue: queue)
     }
     
-    private func updateFingerprint(path: NWPath) {
+    private func processPathUpdate(_ path: NWPath) {
         var ssid: String? = nil
-        var bssid: String? = nil
+        let bssid: String? = nil
         var interfaceType: InterfaceType = .other
         
+        // This runs on 'queue' (background), so XPC calls here won't block Main
         if path.usesInterfaceType(.wifi) {
             interfaceType = .wifi
             // Try to get SSID
             let client = CWWiFiClient.shared()
             if let interface = client.interface() {
                 ssid = interface.ssid()
-                bssid = interface.bssid()
+                // bssid = interface.bssid() // Ignore BSSID to avoid flapping when roaming
             }
-            // Fallback for SSID if CoreWLAN fails or returns nil (e.g. permission issues), 
-            // though typically requires Location permission.
         } else if path.usesInterfaceType(.wiredEthernet) {
             interfaceType = .wired
         }
         
-        // Gateway MAC is harder to get via Swift APIs directly without calling `arp` or sysctl.
-        // For MVP, we stick to SSID and Interface Type.
-        
         // If we are disconnected
+        let newFingerprint: NetworkFingerprint?
         if path.status != .satisfied {
-            self.currentFingerprint = nil
-            return
+            newFingerprint = nil
+        } else {
+            newFingerprint = NetworkFingerprint(
+                ssid: ssid,
+                bssid: bssid,
+                gatewayMac: nil,
+                interfaceType: interfaceType
+            )
         }
         
-        self.currentFingerprint = NetworkFingerprint(
-            ssid: ssid,
-            bssid: bssid,
-            gatewayMac: nil, // TODO: Implement if needed via 'arp -a'
-            interfaceType: interfaceType
-        )
-        
-        print("Network Changed: \(String(describing: self.currentFingerprint))")
+        // Dispatch to Main to update Published properties
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Update currentPath
+            self.currentPath = path
+            
+            // Update fingerprint ONLY if changed
+            if self.currentFingerprint != newFingerprint {
+                self.currentFingerprint = newFingerprint
+                print("Network Changed: \(String(describing: self.currentFingerprint))")
+            }
+        }
     }
 }

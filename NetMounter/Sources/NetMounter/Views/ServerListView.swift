@@ -87,6 +87,7 @@ struct ServerRow: View {
     let onEdit: () -> Void
     @State private var mountStatus: String = "Idle"
     @State private var isMounted = false
+    @State private var animating = false
     let networkPublisher = NetworkMonitor.shared.$currentFingerprint
     
     var body: some View {
@@ -106,7 +107,10 @@ struct ServerRow: View {
                     .font(.system(size: 20))
                     .foregroundColor(statusColor)
                     .opacity(isConnecting ? 0.5 : 1.0)
-                    .animation(isConnecting ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isConnecting)
+                    .scaleEffect(animating && isConnecting ? 1.1 : 1.0)
+                    .animation(animating && isConnecting ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isConnecting)
+                    .onAppear { animating = true }
+                    .onDisappear { animating = false }
             }
             .help(mountStatus) // Tooltip for detailed status
             

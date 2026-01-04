@@ -151,9 +151,8 @@ struct SettingsView: View {
     }
     
     private func toggleLaunchAtLogin(enabled: Bool) {
-        // Since we are running as a command-line tool usually, 
-        // proper Launch At Login requires a LaunchAgent plist.
-        // If this were a sandboxed app bundle, SMAppService would be used.
+        // macOS 有代码签名限制，LaunchAgent 只能启动位于受信任位置的应用
+        // 应用必须在 /Applications 目录下才能通过 LaunchAgent 自启动
         
         let label = "com.netmounter.launchagent"
         let plistName = "\(label).plist"
@@ -162,9 +161,24 @@ struct SettingsView: View {
         let plistURL = launchAgentsURL.appendingPathComponent(plistName)
         
         if enabled {
-            // Create LaunchAgent
-            let executablePath = Bundle.main.executablePath ?? ProcessInfo.processInfo.arguments[0]
+            // 获取应用 bundle 路径
+            guard let bundlePath = Bundle.main.bundlePath as String?,
+                  let executablePath = Bundle.main.executablePath else {
+                launchStatusMessage = "Error: Could not get app path."
+                launchAtLogin = false
+                return
+            }
             
+            // 检查应用是否在 /Applications 目录下
+            let isInApplications = bundlePath.hasPrefix("/Applications/")
+            
+            if !isInApplications {
+                launchStatusMessage = "⚠️ Please move NetMounter.app to /Applications first, then try again."
+                launchAtLogin = false
+                return
+            }
+            
+            // Create LaunchAgent
             let plistContent = """
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -187,7 +201,7 @@ struct SettingsView: View {
             do {
                 try FileManager.default.createDirectory(at: launchAgentsURL, withIntermediateDirectories: true)
                 try plistContent.write(to: plistURL, atomically: true, encoding: .utf8)
-                launchStatusMessage = "Launch Agent created."
+                launchStatusMessage = "✓ Launch Agent created."
             } catch {
                 launchStatusMessage = "Error creating Launch Agent: \(error)"
                 launchAtLogin = false

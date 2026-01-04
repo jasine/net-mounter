@@ -3,6 +3,7 @@ import Combine
 
 class AppState: ObservableObject {
     @Published var servers: [ServerConfig] = []
+    @Published var isUIVisible: Bool = false
     
     private let configURL: URL
     

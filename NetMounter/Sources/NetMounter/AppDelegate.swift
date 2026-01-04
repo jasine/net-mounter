@@ -1,7 +1,7 @@
 import Cocoa
 import SwiftUI
 
-class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
+class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     
@@ -17,13 +17,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup Popover
         popover = NSPopover()
         popover.contentSize = NSSize(width: 320, height: 400)
-        popover.behavior = .transient // Closes when clicking outside
+        popover.behavior = .transient
+        popover.delegate = self
         
-        // We use a wrapper view to inject environment objects
-        let rootView = ServerListView()
+        // 使用 PopoverContentView 包装，它会根据 isUIVisible 条件渲染内容
+        let rootView = PopoverContentView()
             .environmentObject(appState)
             .environmentObject(autoMountService)
-            .frame(width: 320) // Enforce width in SwiftUI as well
+            .frame(width: 320)
         
         popover.contentViewController = NSHostingController(rootView: rootView)
         
@@ -42,14 +43,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if popover.isShown {
                 popover.performClose(sender)
             } else {
-                // Must activate app to receive focus/events
                 NSApplication.shared.activate(ignoringOtherApps: true)
-                
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                
-                // Force window to be key to "capture" initial focus
                 popover.contentViewController?.view.window?.makeKey()
             }
         }
     }
+    
+    // MARK: - NSPopoverDelegate
+    func popoverWillShow(_ notification: Notification) {
+        appState.isUIVisible = true
+    }
+    
+    func popoverDidClose(_ notification: Notification) {
+        appState.isUIVisible = false
+    }
 }
+
+
