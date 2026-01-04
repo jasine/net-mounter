@@ -2,14 +2,12 @@ import Foundation
 
 enum NetworkProtocol: String, Codable, CaseIterable {
     case smb
-    case nfs
     case afp
     case webdav
     
     var scheme: String {
         switch self {
         case .smb: return "smb"
-        case .nfs: return "nfs"
         case .afp: return "afp"
         case .webdav: return "https" // WebDAV over HTTPS
         }
@@ -19,7 +17,6 @@ enum NetworkProtocol: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .smb: return "SMB"
-        case .nfs: return "NFS"
         case .afp: return "AFP"
         case .webdav: return "WebDAV"
         }

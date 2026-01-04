@@ -23,7 +23,7 @@
 ## ✨ Features
 
 - 🖥️ **Menu Bar App** - Lightweight menu bar application, mount with one click
-- 🔌 **Multi-Protocol** - SMB, NFS, AFP, WebDAV
+- 🔌 **Multi-Protocol** - SMB, AFP, WebDAV
 - 🤖 **Auto-Mount** - Automatically mount shares based on network environment
 - 🔐 **Secure Storage** - Passwords securely stored in macOS Keychain
 - 🎨 **Liquid Glass UI** - Beautiful frosted glass interface design
@@ -47,7 +47,6 @@
 | Protocol | Use Case | Status |
 |----------|----------|--------|
 | **SMB** | Windows/NAS file sharing | ✅ |
-| **NFS** | Linux/Unix file sharing | ✅ |
 | **AFP** | Apple file sharing (legacy Mac) | ✅ |
 | **WebDAV** | Network storage (Nextcloud, etc.) | ✅ |
 
