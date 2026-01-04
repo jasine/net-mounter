@@ -31,7 +31,7 @@ struct ServerDetailView: View {
                     TextField("Name", text: $config.alias)
                     Picker("Protocol", selection: $config.serverProtocol) {
                         ForEach(NetworkProtocol.allCases, id: \.self) { proto in
-                            Text(proto.rawValue.uppercased()).tag(proto)
+                            Text(proto.displayName).tag(proto)
                         }
                     }
                     TextField("Hostname / IP", text: $config.hostname)
