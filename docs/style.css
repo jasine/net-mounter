@@ -323,6 +323,73 @@ main {
     line-height: 1.5;
 }
 
+/* Nav Links */
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.nav-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    transition: color 0.3s;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+}
+
+/* Protocols Section */
+.protocols {
+    margin-top: 100px;
+    text-align: center;
+}
+
+.protocols h2 {
+    font-size: 2rem;
+    margin-bottom: 40px;
+    background: linear-gradient(to right, white, #a0a0a0);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.protocol-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+}
+
+.protocol-card {
+    padding: 30px 20px;
+    border-radius: 20px;
+    text-align: center;
+    transition: transform 0.3s;
+}
+
+.protocol-card:hover {
+    transform: translateY(-5px);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.protocol-icon {
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+}
+
+.protocol-card h3 {
+    margin: 0 0 8px 0;
+    font-size: 1.1rem;
+}
+
+.protocol-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
 /* Footer */
 footer {
     text-align: center;
@@ -351,5 +418,9 @@ footer {
     .cta-group {
         justify-content: center;
         flex-direction: column;
+    }
+
+    .protocol-grid {
+        grid-template-columns: repeat(2, 1fr);
     }
 }

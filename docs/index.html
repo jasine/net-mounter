@@ -24,6 +24,7 @@
             <span>NetMounter</span>
         </div>
         <div class="nav-links">
+            <a href="https://github.com/jasine/net-mounter" class="nav-link">GitHub</a>
             <button id="lang-toggle" class="glass-button small">中文</button>
         </div>
     </nav>
@@ -33,16 +34,15 @@
             <div class="hero-content">
                 <h1 id="hero-title" data-i18n="heroTitle">Seamless Network Mounting</h1>
                 <p id="hero-subtitle" data-i18n="heroSubtitle">The lightweight, menu-bar essential for macOS. Auto-mount
-                    SMB shares effortlessly.</p>
+                    network shares effortlessly.</p>
                 <div class="cta-group">
-                    <a href="#" class="glass-button primary" id="download-btn" data-i18n="downloadBtn">Download for
-                        macOS</a>
+                    <a href="https://github.com/jasine/net-mounter/releases" class="glass-button primary"
+                        id="download-btn" data-i18n="downloadBtn">Download for macOS</a>
                     <span class="version-info" id="version-info" data-i18n="versionInfo">v1.0.0 • macOS 14+</span>
                 </div>
             </div>
             <div class="hero-image">
                 <div class="glass-card mockup">
-                    <!-- CSS Mockup of the App Interface -->
                     <div class="mockup-header">
                         <div class="traffic-lights">
                             <span></span><span></span><span></span>
@@ -65,7 +65,7 @@
                             <div class="mockup-icon orange"></div>
                             <div class="mockup-text">
                                 <div class="mockup-row-title">Media Archive</div>
-                                <div class="mockup-row-subtitle">smb://nas.local/media</div>
+                                <div class="mockup-row-subtitle">nfs://nas.local/media</div>
                             </div>
                         </div>
                     </div>
@@ -81,21 +81,63 @@
                     instantly.</p>
             </div>
             <div class="feature-card glass-card">
+                <div class="icon">🔌</div>
+                <h3 data-i18n="feature2Title">Multi-Protocol</h3>
+                <p data-i18n="feature2Desc">Supports SMB, NFS, AFP, and WebDAV protocols for all your network storage
+                    needs.</p>
+            </div>
+            <div class="feature-card glass-card">
                 <div class="icon">🔒</div>
-                <h3 data-i18n="feature2Title">Secure & Native</h3>
-                <p data-i18n="feature2Desc">Built with native Swift APIs. Passwords securely stored in macOS Keychain.
+                <h3 data-i18n="feature3Title">Secure & Native</h3>
+                <p data-i18n="feature3Desc">Built with native Swift APIs. Passwords securely stored in macOS Keychain.
                 </p>
             </div>
             <div class="feature-card glass-card">
                 <div class="icon">💎</div>
-                <h3 data-i18n="feature3Title">Liquid Design</h3>
-                <p data-i18n="feature3Desc">A stunning, modern interface designed for macOS Sonoma and beyond.</p>
+                <h3 data-i18n="feature4Title">Liquid Glass UI</h3>
+                <p data-i18n="feature4Desc">A stunning, modern interface designed for macOS Sonoma and beyond.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🚀</div>
+                <h3 data-i18n="feature5Title">Launch at Login</h3>
+                <p data-i18n="feature5Desc">Start automatically with your Mac. Always ready when you need it.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🖥️</div>
+                <h3 data-i18n="feature6Title">Menu Bar App</h3>
+                <p data-i18n="feature6Desc">Lives in your menu bar. One click to mount or unmount any server.</p>
+            </div>
+        </section>
+
+        <section class="protocols">
+            <h2 data-i18n="protocolsTitle">Supported Protocols</h2>
+            <div class="protocol-grid">
+                <div class="protocol-card glass-card">
+                    <div class="protocol-icon">📁</div>
+                    <h3>SMB</h3>
+                    <p data-i18n="protocolSmb">Windows & NAS file sharing</p>
+                </div>
+                <div class="protocol-card glass-card">
+                    <div class="protocol-icon">🐧</div>
+                    <h3>NFS</h3>
+                    <p data-i18n="protocolNfs">Linux & Unix file sharing</p>
+                </div>
+                <div class="protocol-card glass-card">
+                    <div class="protocol-icon">🍎</div>
+                    <h3>AFP</h3>
+                    <p data-i18n="protocolAfp">Apple file sharing (legacy)</p>
+                </div>
+                <div class="protocol-card glass-card">
+                    <div class="protocol-icon">🌐</div>
+                    <h3>WebDAV</h3>
+                    <p data-i18n="protocolWebdav">Nextcloud, ownCloud & more</p>
+                </div>
             </div>
         </section>
     </main>
 
     <footer>
-        <p>&copy; 2024 NetMounter. <span data-i18n="footerRights">All rights reserved.</span></p>
+        <p>&copy; 2025 NetMounter. <span data-i18n="footerRights">All rights reserved.</span></p>
     </footer>
 
     <script src="script.js"></script>

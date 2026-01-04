@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-blue" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-blue" alt="Platform">
   <img src="https://img.shields.io/badge/swift-5.9-orange" alt="Swift">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
 </p>
