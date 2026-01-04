@@ -20,7 +20,7 @@
 
     <nav class="glass-nav">
         <div class="logo">
-            <img src="./assets/logo.png" alt="NetMounter Logo">
+            <img src="./assets/logo.png?v=2" alt="NetMounter Logo">
             <span>NetMounter</span>
         </div>
         <div class="nav-links">
@@ -51,21 +51,31 @@
                     </div>
                     <div class="mockup-body">
                         <div class="mockup-row">
-                            <div class="mockup-icon green"></div>
+                            <div class="mockup-status-icon green">
+                                <span class="server-icon">🖥️</span>
+                            </div>
                             <div class="mockup-text">
                                 <div class="mockup-row-title">Design Server</div>
                                 <div class="mockup-row-subtitle">smb://192.168.1.10/design</div>
                             </div>
                             <div class="mockup-actions">
-                                <div class="action-btn"></div>
-                                <div class="action-btn"></div>
+                                <div class="action-btn">⏏️</div>
+                                <div class="action-btn">�</div>
+                                <div class="action-btn">✏️</div>
                             </div>
                         </div>
                         <div class="mockup-row">
-                            <div class="mockup-icon orange"></div>
+                            <div class="mockup-status-icon orange">
+                                <span class="server-icon">🖥️</span>
+                            </div>
                             <div class="mockup-text">
                                 <div class="mockup-row-title">Media Archive</div>
                                 <div class="mockup-row-subtitle">nfs://nas.local/media</div>
+                            </div>
+                            <div class="mockup-actions">
+                                <div class="action-btn">▶️</div>
+                                <div class="action-btn disabled">�</div>
+                                <div class="action-btn">✏️</div>
                             </div>
                         </div>
                     </div>
@@ -118,11 +128,6 @@
                     <p data-i18n="protocolSmb">Windows & NAS file sharing</p>
                 </div>
                 <div class="protocol-card glass-card">
-                    <div class="protocol-icon">🐧</div>
-                    <h3>NFS</h3>
-                    <p data-i18n="protocolNfs">Linux & Unix file sharing</p>
-                </div>
-                <div class="protocol-card glass-card">
                     <div class="protocol-icon">🍎</div>
                     <h3>AFP</h3>
                     <p data-i18n="protocolAfp">Apple file sharing (legacy)</p>
@@ -132,6 +137,60 @@
                     <h3>WebDAV</h3>
                     <p data-i18n="protocolWebdav">Nextcloud, ownCloud & more</p>
                 </div>
+            </div>
+        </section>
+
+        <section class="comparison">
+            <h2 data-i18n="comparisonTitle">Why NetMounter?</h2>
+            <div class="table-wrapper glass-card">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="comparisonFeature">Feature</th>
+                            <th>NetMounter</th>
+                            <th>AutoMounter</th>
+                            <th>macOS Finder</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td data-i18n="comparisonMenuBar">Menu Bar App</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonAutoMount">Auto-Mount by Network</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonMultiProtocol">Multi-Protocol (SMB/NFS/AFP/WebDAV)</td>
+                            <td class="yes">✓</td>
+                            <td class="partial">Partial</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonFree">Free & Open Source</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonModernUI">Modern Liquid Glass UI</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonKeychain">Keychain Integration</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                            <td class="yes">✓</td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </section>
     </main>
