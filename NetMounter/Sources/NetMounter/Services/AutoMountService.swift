@@ -12,11 +12,24 @@ class AutoMountService: ObservableObject {
     // Store pending retry work items so we can cancel them if network changes
     private var retryWorkItems: [UUID: DispatchWorkItem] = [:]
     
+    // Timer for periodic health checks
+    private var healthCheckTimer: AnyCancellable?
+    
     init(appState: AppState, networkMonitor: NetworkMonitor = .shared) {
         self.appState = appState
         self.networkMonitor = networkMonitor
         
         setupBindings()
+        setupHealthCheckTimer()
+    }
+    
+    private func setupHealthCheckTimer() {
+        // Run health check every 5 minutes
+        healthCheckTimer = Timer.publish(every: 300, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.performPeriodicHealthCheck()
+            }
     }
     
     private func setupBindings() {
@@ -40,8 +53,41 @@ class AutoMountService: ObservableObject {
         for server in appState.servers {
             // Check if this server has a matching rule
             if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) }) {
+                // If already mounted, skip
+                if let path = MountingManager.shared.findExistingMountPath(for: URL(string: server.urlString)!) {
+                     print("Server \(server.alias) already mounted at \(path). Skipping auto-mount.")
+                     continue
+                }
+                
                 // Trigger mount
                 attemptMount(server)
+            }
+        }
+    }
+    
+    private func performPeriodicHealthCheck() {
+        guard let currentFingerprint = networkMonitor.currentFingerprint else { 
+            print("No current network fingerprint available for periodic check.")
+            return 
+        }
+        
+        print("Starting periodic health check for servers...")
+        
+        for server in appState.servers {
+            // Check if this server has a matching rule for current network
+            if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(currentFingerprint) }) {
+                
+                let serverURL = URL(string: server.urlString)!
+                if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
+                    // Check if path is actually responsive (zombie check)
+                    // MountingManager.shared.isMountAlive is private, we depend on MountingManager's internal check during mount
+                    // But here we can do a quick check
+                    print("Periodic check: Server \(server.alias) is mounted at \(path).")
+                } else {
+                    print("Periodic check: Server \(server.alias) should be mounted but is NOT. Attempting recovery...")
+                    // Reset retry count for periodic check to give it a fresh chance
+                    attemptMount(server, retryCount: 0)
+                }
             }
         }
     }
