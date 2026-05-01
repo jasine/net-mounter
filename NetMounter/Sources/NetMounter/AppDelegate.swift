@@ -24,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         let rootView = PopoverContentView()
             .environmentObject(appState)
             .environmentObject(autoMountService)
-            .frame(width: 320)
+            .frame(width: 380)
         
         popover.contentViewController = NSHostingController(rootView: rootView)
         

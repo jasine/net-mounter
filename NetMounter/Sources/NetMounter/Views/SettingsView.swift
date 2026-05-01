@@ -3,7 +3,7 @@ import ServiceManagement
 
 struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
-    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var launchStatusMessage: String = ""
     
     var body: some View {
@@ -77,7 +77,10 @@ struct SettingsView: View {
                                 .padding(.leading, 4)
                             
                             Button(action: {
-                                NSApplication.shared.terminate(nil)
+                                dismiss()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    NSApplication.shared.terminate(nil)
+                                }
                             }) {
                                 HStack {
                                     Text("Quit NetMounter")
@@ -147,64 +150,22 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 320, height: 500) // Increase height to accommodate 3 groups
+        .frame(width: 380, height: 500) // Increase height to accommodate 3 groups
     }
     
     private func toggleLaunchAtLogin(enabled: Bool) {
-        // macOS 有代码签名限制，LaunchAgent 只能启动位于受信任位置的应用
-        // 应用必须在 /Applications 目录下才能通过 LaunchAgent 自启动
-        
-        let label = "com.netmounter.launchagent"
-        let plistName = "\(label).plist"
-        let libraryURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-        let launchAgentsURL = libraryURL.appendingPathComponent("LaunchAgents")
-        let plistURL = launchAgentsURL.appendingPathComponent(plistName)
-        
-        if enabled {
-            // 获取应用 bundle 路径
-            guard let bundlePath = Bundle.main.bundlePath as String?,
-                  let executablePath = Bundle.main.executablePath else {
-                launchStatusMessage = "Error: Could not get app path."
-                launchAtLogin = false
-                return
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                try service.register()
+                launchStatusMessage = "Launch at login enabled."
+            } else {
+                try service.unregister()
+                launchStatusMessage = "Launch at login disabled."
             }
-
-            // 检查应用是否在 /Applications 目录下
-            let isInApplications = bundlePath.hasPrefix("/Applications/")
-
-            if !isInApplications {
-                launchStatusMessage = "⚠️ Please move NetMounter.app to /Applications first, then try again."
-                launchAtLogin = false
-                return
-            }
-
-            // Create LaunchAgent using PropertyListSerialization (safe from XML injection)
-            let plistDict: [String: Any] = [
-                "Label": label,
-                "ProgramArguments": [executablePath],
-                "RunAtLoad": true,
-                "KeepAlive": false
-            ]
-
-            do {
-                try FileManager.default.createDirectory(at: launchAgentsURL, withIntermediateDirectories: true)
-                let plistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
-                try plistData.write(to: plistURL, options: .atomic)
-                launchStatusMessage = "✓ Launch Agent created."
-            } catch {
-                launchStatusMessage = "Error creating Launch Agent: \(error)"
-                launchAtLogin = false
-            }
-        } else {
-            // Remove LaunchAgent
-            do {
-                if FileManager.default.fileExists(atPath: plistURL.path) {
-                    try FileManager.default.removeItem(at: plistURL)
-                }
-                launchStatusMessage = "Launch Agent removed."
-            } catch {
-                launchStatusMessage = "Error removing Launch Agent: \(error)"
-            }
+        } catch {
+            launchStatusMessage = "Error: \(error.localizedDescription)"
+            launchAtLogin = !enabled // revert toggle
         }
     }
 }
