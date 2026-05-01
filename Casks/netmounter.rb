@@ -1,6 +1,6 @@
 cask "netmounter" do
-  version "1.0.0"
-  sha256 "9f300ac3ba64fbd5bac4b25d87575147459e9301823512b67957e58c210309d4"
+  version "1.0.1"
+  sha256 "d614aaa90160353e30c7f19aca3e93afd9465c9376e4a14bd2cb738cdddc56af"
 
   url "https://github.com/jasine/net-mounter/releases/download/v#{version}/NetMounter.dmg"
   name "NetMounter"
