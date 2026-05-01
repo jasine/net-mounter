@@ -40,6 +40,9 @@
                         id="download-btn" data-i18n="downloadBtn">Download for macOS</a>
                     <span class="version-info" id="version-info" data-i18n="versionInfo">v1.0.0 • macOS 14+</span>
                 </div>
+                <div class="brew-install" style="margin-top: 1rem;">
+                    <code data-i18n="brewCmd" style="background: rgba(255,255,255,0.1); padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.9rem; user-select: all;">brew tap jasine/tap && brew install --cask netmounter</code>
+                </div>
             </div>
             <div class="hero-image">
                 <div class="glass-card mockup">
@@ -60,7 +63,7 @@
                             </div>
                             <div class="mockup-actions">
                                 <div class="action-btn">⏏️</div>
-                                <div class="action-btn">�</div>
+                                <div class="action-btn">📂</div>
                                 <div class="action-btn">✏️</div>
                             </div>
                         </div>
@@ -74,7 +77,7 @@
                             </div>
                             <div class="mockup-actions">
                                 <div class="action-btn">▶️</div>
-                                <div class="action-btn disabled">�</div>
+                                <div class="action-btn disabled">📂</div>
                                 <div class="action-btn">✏️</div>
                             </div>
                         </div>
@@ -89,6 +92,11 @@
                 <h3 data-i18n="feature1Title">Auto-Mount</h3>
                 <p data-i18n="feature1Desc">Automatically detects your network environment and mounts the right shares
                     instantly.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">📡</div>
+                <h3 data-i18n="feature7Title">Network Discovery</h3>
+                <p data-i18n="feature7Desc">Auto-discover servers and shares on your network via Bonjour/mDNS. Browse and add with one click.</p>
             </div>
             <div class="feature-card glass-card">
                 <div class="icon">🔌</div>
@@ -112,11 +120,6 @@
                 <h3 data-i18n="feature5Title">Launch at Login</h3>
                 <p data-i18n="feature5Desc">Start automatically with your Mac. Always ready when you need it.</p>
             </div>
-            <div class="feature-card glass-card">
-                <div class="icon">🖥️</div>
-                <h3 data-i18n="feature6Title">Menu Bar App</h3>
-                <p data-i18n="feature6Desc">Lives in your menu bar. One click to mount or unmount any server.</p>
-            </div>
         </section>
 
         <section class="protocols">
@@ -126,6 +129,11 @@
                     <div class="protocol-icon">📁</div>
                     <h3>SMB</h3>
                     <p data-i18n="protocolSmb">Windows & NAS file sharing</p>
+                </div>
+                <div class="protocol-card glass-card">
+                    <div class="protocol-icon">🐧</div>
+                    <h3>NFS</h3>
+                    <p data-i18n="protocolNfs">Linux & Unix file sharing</p>
                 </div>
                 <div class="protocol-card glass-card">
                     <div class="protocol-icon">🍎</div>
@@ -166,10 +174,22 @@
                             <td class="no">✗</td>
                         </tr>
                         <tr>
+                            <td data-i18n="comparisonDiscovery">Network Discovery</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="partial">Partial</td>
+                        </tr>
+                        <tr>
                             <td data-i18n="comparisonMultiProtocol">Multi-Protocol (SMB/NFS/AFP/WebDAV)</td>
                             <td class="yes">✓</td>
                             <td class="partial">Partial</td>
                             <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonBrew">Homebrew Install</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
                         </tr>
                         <tr>
                             <td data-i18n="comparisonFree">Free & Open Source</td>

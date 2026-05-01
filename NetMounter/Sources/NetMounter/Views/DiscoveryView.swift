@@ -83,7 +83,7 @@ struct DiscoveryView: View {
                 }
             }
         }
-        .frame(width: 320, height: 480)
+        .frame(width: 380, height: 480)
         .onAppear {
             discoveryService.startScan()
         }

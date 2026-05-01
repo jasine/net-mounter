@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/usr/bin/showmount -e 192.168.1.2 2>&1)"
+      "Bash(/usr/bin/showmount -e 192.168.1.2 2>&1)",
+      "Bash(shasum -a 256 /Users/chenxinyu.1/Code/net-mounter/NetMounter/NetMounter.dmg)",
+      "Bash(cd /Users/chenxinyu.1/Code/net-mounter && git status)",
+      "Bash(git commit -m \"$\\(cat <<'EOF'\nfeat: NFS support, network discovery, security fixes, Homebrew cask\n\n- Add NFS protocol support \\(mount via privileged osascript, unmount via diskutil\\)\n- Add network auto-discovery \\(Bonjour scan for SMB/AFP/NFS + share enumeration\\)\n- NFS auto-probe on discovered SMB/AFP hosts \\(port 2049 check\\)\n- Security: credentials passed via NetFS params instead of URL\n- Security: PropertyListSerialization for LaunchAgent plist generation\n- Fix: thread safety in ConnectionTester with serial queue\n- Fix: strip interface scope suffix \\(%en0\\) from resolved IPs\n- Fix: pipe read before waitUntilExit to avoid deadlock\n- Add Homebrew Cask for distribution via brew tap\n\nCo-Authored-By: Claude Opus 4 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push origin main 2>&1)",
+      "Bash(gh release create v1.0.0 NetMounter/NetMounter.dmg \\\\\n  --title \"NetMounter v1.0.0\" \\\\\n  --notes \"$\\(cat <<'EOF'\n## NetMounter v1.0.0\n\nMenu bar app for mounting network shares on macOS.\n\n### Features\n- **Protocols**: SMB, AFP, NFS, WebDAV\n- **Network Discovery**: Auto-scan for servers via Bonjour \\(mDNS\\)\n- **Share Enumeration**: Browse SMB shares and NFS exports\n- **Auto-Mount**: Mount shares automatically based on network fingerprint\n- **Keychain Integration**: Secure credential storage\n- **Menu Bar App**: Lightweight, always accessible\n\n### Requirements\n- macOS 14.0 \\(Sonoma\\) or later\n\n### Install via Homebrew\n```bash\nbrew tap jasine/tap\nbrew install --cask netmounter\n```\nEOF\n\\)\" 2>&1)",
+      "Bash(which gh 2>/dev/null || brew list gh 2>/dev/null || echo \"gh not installed\")",
+      "Bash(brew install gh 2>&1 | tail -5)",
+      "Bash(gh auth status 2>&1)",
+      "Bash(curl -sL https://github.com/jasine/net-mounter/releases/download/v1.0.0/NetMounter.dmg | shasum -a 256)",
+      "Bash(gh repo create jasine/homebrew-tap --public --description \"Homebrew tap for jasine's apps\" 2>&1)",
+      "Bash(cd /tmp && rm -rf homebrew-tap && gh repo clone jasine/homebrew-tap 2>&1)",
+      "Bash(cd /tmp/homebrew-tap && git push -u origin main 2>&1)",
+      "Bash(cd /tmp/homebrew-tap && git remote set-url origin git@github.com:jasine/homebrew-tap.git && git push -u origin main 2>&1)"
     ]
   }
 }
