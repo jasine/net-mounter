@@ -2,6 +2,9 @@ import Foundation
 import Network
 import CoreWLAN
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "NetworkMonitor")
 
 class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
@@ -42,7 +45,7 @@ class NetworkMonitor: ObservableObject {
         var ssid: String? = nil
         let bssid: String? = nil
         var interfaceType: InterfaceType = .other
-        
+
         // This runs on 'queue' (background), so XPC calls here won't block Main
         if path.usesInterfaceType(.wifi) {
             interfaceType = .wifi
@@ -55,32 +58,89 @@ class NetworkMonitor: ObservableObject {
         } else if path.usesInterfaceType(.wiredEthernet) {
             interfaceType = .wired
         }
-        
+
         // If we are disconnected
-        let newFingerprint: NetworkFingerprint?
         if path.status != .satisfied {
-            newFingerprint = nil
-        } else {
-            newFingerprint = NetworkFingerprint(
-                ssid: ssid,
-                bssid: bssid,
-                gatewayMac: nil,
-                interfaceType: interfaceType
-            )
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.currentPath = path
+                if self.currentFingerprint != nil {
+                    self.currentFingerprint = nil
+                    logger.info("Network disconnected")
+                }
+            }
+            return
         }
-        
-        // Dispatch to Main to update Published properties
+
+        // For wired networks, resolve gateway MAC on a separate queue
+        // to avoid blocking the NWPathMonitor callback queue.
+        if interfaceType == .wired {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let gatewayMac = Self.getDefaultGatewayMAC()
+                let fingerprint = NetworkFingerprint(
+                    ssid: ssid, bssid: bssid,
+                    gatewayMac: gatewayMac, interfaceType: interfaceType
+                )
+                self?.publishFingerprint(fingerprint, path: path)
+            }
+        } else {
+            let fingerprint = NetworkFingerprint(
+                ssid: ssid, bssid: bssid,
+                gatewayMac: nil, interfaceType: interfaceType
+            )
+            publishFingerprint(fingerprint, path: path)
+        }
+    }
+
+    private func publishFingerprint(_ fingerprint: NetworkFingerprint, path: NWPath) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            
-            // Update currentPath
             self.currentPath = path
-            
-            // Update fingerprint ONLY if changed
-            if self.currentFingerprint != newFingerprint {
-                self.currentFingerprint = newFingerprint
-                print("Network Changed: \(String(describing: self.currentFingerprint))")
+            if self.currentFingerprint != fingerprint {
+                self.currentFingerprint = fingerprint
+                logger.info("Network changed: \(String(describing: self.currentFingerprint), privacy: .public)")
             }
+        }
+    }
+
+    /// Resolve the default gateway's MAC address via `arp` for wired network fingerprinting.
+    private static func getDefaultGatewayMAC() -> String? {
+        // 1. Get default gateway IP from `route get default`
+        guard let gatewayIP = runCommand("/usr/sbin/route", arguments: ["-n", "get", "default"])
+            .components(separatedBy: "\n")
+            .first(where: { $0.contains("gateway:") })?
+            .components(separatedBy: ":")
+            .last?
+            .trimmingCharacters(in: .whitespaces),
+              !gatewayIP.isEmpty else { return nil }
+
+        // 2. Resolve MAC via `arp`
+        guard let arpLine = runCommand("/usr/sbin/arp", arguments: ["-n", gatewayIP])
+            .components(separatedBy: "\n")
+            .first(where: { $0.contains(gatewayIP) }) else { return nil }
+
+        // arp output format: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ..."
+        let parts = arpLine.components(separatedBy: " ")
+        if let atIndex = parts.firstIndex(of: "at"), atIndex + 1 < parts.count {
+            let mac = parts[atIndex + 1]
+            if mac.contains(":") { return mac }
+        }
+        return nil
+    }
+
+    private static func runCommand(_ path: String, arguments: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        } catch {
+            return ""
         }
     }
 }

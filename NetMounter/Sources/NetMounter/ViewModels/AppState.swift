@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "AppState")
 
 class AppState: ObservableObject {
     @Published var servers: [ServerConfig] = []
@@ -39,7 +42,7 @@ class AppState: ObservableObject {
             let data = try JSONEncoder().encode(servers)
             try data.write(to: configURL)
         } catch {
-            print("Failed to save config: \(error)")
+            logger.error("Failed to save config: \(error.localizedDescription, privacy: .public)")
         }
     }
     
@@ -48,7 +51,7 @@ class AppState: ObservableObject {
             let data = try Data(contentsOf: configURL)
             servers = try JSONDecoder().decode([ServerConfig].self, from: data)
         } catch {
-            print("No existing config or failed to load: \(error)")
+            logger.info("No existing config or failed to load: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

@@ -1,13 +1,14 @@
 import SwiftUI
+import os
 
-
-
+private let logger = Logger(subsystem: "com.netmounter.app", category: "ServerListView")
 struct ServerListView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var autoMountService: AutoMountService
     
     @State private var showingAddSheet = false
     @State private var showingSettings = false
+    @State private var showingDiscovery = false
     @State private var editingServer: ServerConfig?
     
     var body: some View {
@@ -40,7 +41,18 @@ struct ServerListView: View {
                             .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
                     }
                     .buttonStyle(.plain)
-                    
+
+                    Button(action: { showingDiscovery = true }) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.primary)
+                            .padding(8)
+                            .background(.thinMaterial)
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                    }
+                    .buttonStyle(.plain)
+
                     Button(action: { showingSettings = true }) {
                         Image(systemName: "gear")
                             .font(.system(size: 16, weight: .medium))
@@ -59,9 +71,15 @@ struct ServerListView: View {
                 ScrollView {
                     LazyVStack(spacing: 16) {
                         ForEach(appState.servers) { server in
-                            ServerRow(server: server) {
+                            ServerRow(server: server, onEdit: {
                                 editingServer = server
-                            }
+                            }, onDelete: {
+                                // Clean up keychain entry before removing
+                                if let keyId = server.keychainItemId {
+                                    KeychainManager.shared.delete(account: keyId)
+                                }
+                                appState.removeServer(id: server.id)
+                            })
                         }
                     }
                     .padding()
@@ -70,6 +88,9 @@ struct ServerListView: View {
         }
         .sheet(isPresented: $showingAddSheet) {
             ServerDetailView()
+        }
+        .sheet(isPresented: $showingDiscovery) {
+            DiscoveryView()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
@@ -85,9 +106,11 @@ struct ServerListView: View {
 struct ServerRow: View {
     let server: ServerConfig
     let onEdit: () -> Void
+    let onDelete: () -> Void
     @State private var mountStatus: String = "Idle"
     @State private var isMounted = false
     @State private var animating = false
+    @State private var showDeleteConfirm = false
     let networkPublisher = NetworkMonitor.shared.$currentFingerprint
     
     var body: some View {
@@ -158,6 +181,16 @@ struct ServerRow: View {
                         }
                         .buttonStyle(.plain)
                         .help("Edit")
+
+                        Button(action: { showDeleteConfirm = true }) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 14))
+                                .padding(8)
+                                .background(.thinMaterial)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete")
                     }
                 }
                 
@@ -190,6 +223,12 @@ struct ServerRow: View {
         }
         .onReceive(networkPublisher) { fingerprint in
             handleNetworkChange(fingerprint)
+        }
+        .alert("Delete Server", isPresented: $showDeleteConfirm) {
+            Button("Delete", role: .destructive) { onDelete() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete \"\(server.alias)\"?")
         }
     }
     
@@ -283,7 +322,7 @@ struct ServerRow: View {
                     case .failure(let error):
                         isMounted = false
                         mountStatus = "Error: \(error.localizedDescription)"
-                        print("Error: \(error)")
+                        logger.error("Mount error: \(error.localizedDescription, privacy: .public)")
                     }
                 }
             }

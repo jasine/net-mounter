@@ -17,3 +17,10 @@
 "Auto-mount rules can be configured in settings." = "Auto-mount rules can be configured in settings.";
 "Settings..." = "Settings...";
 "Quit" = "Quit";
+"Discover Servers" = "Discover Servers";
+"Scanning..." = "Scanning...";
+"No servers found" = "No servers found";
+"No shares found" = "No shares found";
+"Added" = "Added";
+"Done" = "Done";
+"NFS uses host-based access control. No credentials needed." = "NFS uses host-based access control. No credentials needed.";

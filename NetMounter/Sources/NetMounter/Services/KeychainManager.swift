@@ -1,5 +1,8 @@
 import Foundation
 import Security
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "KeychainManager")
 
 class KeychainManager {
     static let shared = KeychainManager()
@@ -25,7 +28,7 @@ class KeychainManager {
         if status == errSecSuccess {
             return account // Return the account name as the ID/reference
         } else {
-            print("Error saving to keychain: \(status)")
+            logger.error("Error saving to keychain: \(status)")
             return nil
         }
     }

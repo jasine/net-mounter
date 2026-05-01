@@ -39,21 +39,27 @@ struct ServerDetailView: View {
                 }
                 
                 Section(header: Text("Authentication").foregroundColor(.secondary)) {
-                    TextField("Username", text: Binding(
-                        get: { config.username ?? "" },
-                        set: { config.username = $0.isEmpty ? nil : $0 }
-                    ))
-                    SecureField("Password", text: $password)
-                    
-                    Button("Test Connection") {
-                        testConnection()
-                    }
-                    .disabled(config.hostname.isEmpty || isTestRunning)
-                    
-                    if let result = testResult {
-                        Text(result ? "Connection Successful" : "Connection Failed")
-                            .foregroundColor(result ? .green : .red)
+                    if config.serverProtocol == .nfs {
+                        Text("NFS uses host-based access control. No credentials needed.")
                             .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        TextField("Username", text: Binding(
+                            get: { config.username ?? "" },
+                            set: { config.username = $0.isEmpty ? nil : $0 }
+                        ))
+                        SecureField("Password", text: $password)
+
+                        Button("Test Connection") {
+                            testConnection()
+                        }
+                        .disabled(config.hostname.isEmpty || isTestRunning)
+
+                        if let result = testResult {
+                            Text(result ? "Connection Successful" : "Connection Failed")
+                                .foregroundColor(result ? .green : .red)
+                                .font(.caption)
+                        }
                     }
                 }
                 
@@ -72,7 +78,7 @@ struct ServerDetailView: View {
                 Button("Save") {
                     save()
                 }
-                .disabled(config.alias.isEmpty || config.hostname.isEmpty)
+                .disabled(config.alias.isEmpty || config.hostname.isEmpty || (config.serverProtocol == .nfs && config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\ ")).isEmpty))
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
@@ -93,7 +99,7 @@ struct ServerDetailView: View {
     private func testConnection() {
         isTestRunning = true
         testResult = nil
-        ConnectionTester.shared.checkReachability(host: config.hostname) { result in
+        ConnectionTester.shared.checkReachability(host: config.hostname, port: config.serverProtocol.defaultPort) { result in
             DispatchQueue.main.async {
                 isTestRunning = false
                 switch result {
@@ -109,10 +115,15 @@ struct ServerDetailView: View {
     private func save() {
         // Save password if provided
         if !password.isEmpty {
-            let accountName = UUID().uuidString // Unique ID for keychain item
+            // Reuse existing keychain item ID or create a new one
+            let accountName = config.keychainItemId ?? UUID().uuidString
             if let savedAccount = KeychainManager.shared.save(password: password, for: accountName) {
                 config.keychainItemId = savedAccount
             }
+        } else if password.isEmpty, let keyId = config.keychainItemId {
+            // Password cleared — remove keychain entry
+            KeychainManager.shared.delete(account: keyId)
+            config.keychainItemId = nil
         }
         
         if isNew {
