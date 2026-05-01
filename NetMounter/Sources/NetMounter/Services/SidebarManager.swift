@@ -1,5 +1,7 @@
 import Foundation
-import CoreServices
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "SidebarManager")
 
 class SidebarManager {
     static let shared = SidebarManager()
@@ -32,10 +34,10 @@ class SidebarManager {
                 refresh.arguments = ["sharedfilelistd"]
                 try? refresh.run()
             } else {
-                print("sfltool failed with exit code: \(process.terminationStatus)")
+                logger.error("sfltool failed with exit code: \(process.terminationStatus)")
             }
         } catch {
-            print("Failed to run sfltool: \(error)")
+            logger.error("Failed to run sfltool: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

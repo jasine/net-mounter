@@ -3,21 +3,34 @@ import Foundation
 enum NetworkProtocol: String, Codable, CaseIterable {
     case smb
     case afp
+    case nfs
     case webdav
-    
+
     var scheme: String {
         switch self {
         case .smb: return "smb"
         case .afp: return "afp"
+        case .nfs: return "nfs"
         case .webdav: return "https" // WebDAV over HTTPS
         }
     }
-    
+
+    /// Default port used for connectivity checks
+    var defaultPort: UInt16 {
+        switch self {
+        case .smb: return 445
+        case .afp: return 548
+        case .nfs: return 2049
+        case .webdav: return 443
+        }
+    }
+
     /// 用于 UI 显示的协议名称
     var displayName: String {
         switch self {
         case .smb: return "SMB"
         case .afp: return "AFP"
+        case .nfs: return "NFS"
         case .webdav: return "WebDAV"
         }
     }

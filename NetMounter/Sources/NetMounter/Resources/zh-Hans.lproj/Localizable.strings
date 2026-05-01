@@ -17,3 +17,10 @@
 "Auto-mount rules can be configured in settings." = "自动挂载规则可以在设置中配置。";
 "Settings..." = "设置...";
 "Quit" = "退出";
+"Discover Servers" = "发现服务器";
+"Scanning..." = "扫描中...";
+"No servers found" = "未发现服务器";
+"No shares found" = "未发现共享";
+"Added" = "已添加";
+"Done" = "完成";
+"NFS uses host-based access control. No credentials needed." = "NFS 使用基于主机的访问控制，无需输入凭据。";

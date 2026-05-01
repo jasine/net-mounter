@@ -77,7 +77,7 @@ struct SettingsView: View {
                                 .padding(.leading, 4)
                             
                             Button(action: {
-                                exit(0)
+                                NSApplication.shared.terminate(nil)
                             }) {
                                 HStack {
                                     Text("Quit NetMounter")
@@ -168,39 +168,28 @@ struct SettingsView: View {
                 launchAtLogin = false
                 return
             }
-            
+
             // 检查应用是否在 /Applications 目录下
             let isInApplications = bundlePath.hasPrefix("/Applications/")
-            
+
             if !isInApplications {
                 launchStatusMessage = "⚠️ Please move NetMounter.app to /Applications first, then try again."
                 launchAtLogin = false
                 return
             }
-            
-            // Create LaunchAgent
-            let plistContent = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>Label</key>
-                <string>\(label)</string>
-                <key>ProgramArguments</key>
-                <array>
-                    <string>\(executablePath)</string>
-                </array>
-                <key>RunAtLoad</key>
-                <true/>
-                <key>KeepAlive</key>
-                <false/>
-            </dict>
-            </plist>
-            """
-            
+
+            // Create LaunchAgent using PropertyListSerialization (safe from XML injection)
+            let plistDict: [String: Any] = [
+                "Label": label,
+                "ProgramArguments": [executablePath],
+                "RunAtLoad": true,
+                "KeepAlive": false
+            ]
+
             do {
                 try FileManager.default.createDirectory(at: launchAgentsURL, withIntermediateDirectories: true)
-                try plistContent.write(to: plistURL, atomically: true, encoding: .utf8)
+                let plistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0)
+                try plistData.write(to: plistURL, options: .atomic)
                 launchStatusMessage = "✓ Launch Agent created."
             } catch {
                 launchStatusMessage = "Error creating Launch Agent: \(error)"

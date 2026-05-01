@@ -1,11 +1,14 @@
 import Foundation
 import NetFS
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "MountingManager")
 
 enum MountError: LocalizedError {
     case mountFailed(Int32)
     case invalidURL
     case authenticationFailed
-    
+
     var errorDescription: String? {
         switch self {
         case .mountFailed(let code):
@@ -23,47 +26,39 @@ enum MountError: LocalizedError {
 
 class MountingManager {
     static let shared = MountingManager()
-    
+
     // Mount a server configuration
     func mount(config: ServerConfig, completion: @escaping (Result<String, Error>) -> Void) {
-        // Construct the URL with credentials if available
-        var urlComponents = URLComponents(string: config.urlString)
-        
-        if let username = config.username, 
-           let keyId = config.keychainItemId, 
-           let password = KeychainManager.shared.retrievePassword(for: keyId) {
-            urlComponents?.user = username
-            urlComponents?.password = password
+        // NetFS does not support NFS — use system URL handler instead
+        if config.serverProtocol == .nfs {
+            mountNFS(config: config, completion: completion)
+            return
         }
-        
-        guard let url = urlComponents?.url else {
+
+        guard let url = URL(string: config.urlString) else {
             completion(.failure(MountError.invalidURL))
             return
         }
-        
-        print("[Debug] Attempting to mount URL: \(url.absoluteString)")
-        
-        // NetFS requires a CFURL. Does not show UI by default if we provide info.
-        // NetFSMountURLSync signature:
-        // func NetFSMountURLSync(_ url: CFURL!, _ mountpath: CFURL!, _ user: CFString!, _ passwd: CFString!, _ open_options: CFMutableDictionary!, _ mount_options: CFMutableDictionary!, _ mountpoints: UnsafeMutablePointer<Unmanaged<CFArray>?>!) -> Int32
-        
-        // Running on background thread to strictly avoid blocking main thread, though Sync implies blocking.
+
+        // Retrieve credentials separately — never embed in URL
+        let user: CFString? = config.username as CFString?
+        let password: CFString? = {
+            guard let keyId = config.keychainItemId else { return nil }
+            return KeychainManager.shared.retrievePassword(for: keyId) as CFString?
+        }()
+
         DispatchQueue.global(qos: .userInitiated).async {
             var mountpoints: Unmanaged<CFArray>? = nil
-            
-            // We can pass open_options to suppress UI if needed, but providing user/pass in URL usually suffices for "silent-ish" mount or prompts if fails.
-            // To completely suppress UI we might need kNetFSAllowSubMountsKey or similar options, but let's start simple.
-            
-            let result = NetFSMountURLSync(url as CFURL, 
-                                           nil, // Default mount path (/Volumes/ShareName)
-                                           nil, // user provided in URL
-                                           nil, // pass provided in URL
-                                           nil, // open_options
-                                           nil, // mount_options
+
+            let result = NetFSMountURLSync(url as CFURL,
+                                           nil,      // Default mount path (/Volumes/ShareName)
+                                           user,     // user passed separately
+                                           password, // password passed separately
+                                           nil,      // open_options
+                                           nil,      // mount_options
                                            &mountpoints)
-            
+
             if result == 0 {
-                // Success
                 if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
                     completion(.success(firstMount))
                 } else {
@@ -72,16 +67,13 @@ class MountingManager {
             } else if result == 17 || result == EEXIST {
                 // EEXIST: Mount point exists or already mounted.
                 if let existingPath = self.findExistingMountPath(for: url) {
-                    // Check if the mount is actually responsive (zombie check)
                     if self.isMountAlive(existingPath) {
                          completion(.success(existingPath))
                     } else {
-                        print("[MountingManager] Found zombie mount at \(existingPath). Force unmounting...")
-                        // Force unmount
+                        logger.warning("Found zombie mount at \(existingPath, privacy: .public). Force unmounting...")
                         self.forceUnmount(path: existingPath)
-                        // Retry mount once
-                        print("[MountingManager] Retrying mount after cleanup...")
-                        let retryResult = NetFSMountURLSync(url as CFURL, nil, nil, nil, nil, nil, &mountpoints)
+                        logger.info("Retrying mount after cleanup...")
+                        let retryResult = NetFSMountURLSync(url as CFURL, nil, user, password, nil, nil, &mountpoints)
                         if retryResult == 0 {
                             if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
                                 completion(.success(firstMount))
@@ -100,80 +92,144 @@ class MountingManager {
             }
         }
     }
-    
+
     func findExistingMountPath(for url: URL) -> String? {
-        // Normalize the URL for comparison (remove user/pass scheme/host/path)
-        // mountedVolumeURLs often look like file:///Volumes/Share
-        // We need to check the volume resource values to see the source source URL (if available) or check Statfs
-        
         let keys: [URLResourceKey] = [.volumeNameKey, .volumeURLForRemountingKey]
         let mountedURLs = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [])
-        
-        // Trying to match hostname and path component
-        // We only use targetShare for the heuristic check
+
         guard let targetShare = url.pathComponents.last else { return nil }
-        
+        let targetHost = url.host?.lowercased()
+
         for mountURL in mountedURLs ?? [] {
-            if (try? mountURL.resourceValues(forKeys: Set(keys))) != nil {
-                // strict match might be hard. 
-                // Let's check if the mount path ends with the share name (heuristic)
-                if mountURL.lastPathComponent == targetShare {
-                     // We could also check statfs to be sure it's from the same host, but for now this is a reasonable fallback.
-                     return mountURL.path
+            guard mountURL.lastPathComponent == targetShare else { continue }
+
+            // Verify hostname via volumeURLForRemounting if available
+            if let values = try? mountURL.resourceValues(forKeys: Set(keys)),
+               let remountURL = values.volumeURLForRemounting {
+                let remountHost = remountURL.host?.lowercased()
+                if remountHost == targetHost || remountHost == nil || targetHost == nil {
+                    return mountURL.path
                 }
+            } else {
+                return mountURL.path
             }
         }
         return nil
     }
-    
+
     func unmount(mountPath: String, completion: @escaping (Error?) -> Void) {
-        // ... (existing logic wrapper)
-        // We reuse forceUnmount logic but async for the UI
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/sbin/umount")
-        process.arguments = [mountPath]
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                completion(nil)
-            } else {
-                completion(MountError.mountFailed(process.terminationStatus))
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+            process.arguments = ["unmount", mountPath]
+
+            let errorPipe = Pipe()
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    DispatchQueue.main.async { completion(nil) }
+                } else {
+                    let stderr = String(data: errorData, encoding: .utf8) ?? ""
+                    logger.error("diskutil unmount failed: \(stderr, privacy: .public)")
+                    DispatchQueue.main.async { completion(MountError.mountFailed(process.terminationStatus)) }
+                }
+            } catch {
+                DispatchQueue.main.async { completion(error) }
             }
-        } catch {
-            completion(error)
         }
     }
-    
+
     private func forceUnmount(path: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/sbin/umount")
-        process.arguments = ["-f", path] // force
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+        process.arguments = ["unmount", "force", path]
         try? process.run()
         process.waitUntilExit()
     }
-    
-    // Check if a mount path is responsive
+
+    // MARK: - NFS Mount
+
+    /// Mount NFS via privileged shell command.
+    /// macOS requires root for NFS mounts — the system auth dialog supports Touch ID
+    /// on macOS Ventura+ with Touch ID hardware.
+    private func mountNFS(config: ServerConfig, completion: @escaping (Result<String, Error>) -> Void) {
+        let cleanShare = config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\ "))
+        guard !cleanShare.isEmpty else {
+            completion(.failure(MountError.invalidURL))
+            return
+        }
+
+        guard let url = URL(string: config.urlString) else {
+            completion(.failure(MountError.invalidURL))
+            return
+        }
+
+        // Check if already mounted
+        if let existingPath = findExistingMountPath(for: url) {
+            if isMountAlive(existingPath) {
+                completion(.success(existingPath))
+                return
+            } else {
+                forceUnmount(path: existingPath)
+            }
+        }
+
+        let sharePath = "/\(cleanShare)"
+        let mountName = URL(fileURLWithPath: sharePath).lastPathComponent
+        let mountPoint = "/Volumes/\(mountName)"
+        let nfsSource = "\(config.hostname):\(sharePath)"
+
+        // mkdir + mount both need root. Use osascript process so the system-level
+        // auth dialog appears above all windows (not blocked by sheets).
+        let shellCmd = "mkdir -p '\(mountPoint)' && /sbin/mount -t nfs -o resvport,noowners '\(nfsSource)' '\(mountPoint)'"
+        let script = "do shell script \"\(shellCmd)\" with administrator privileges"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+
+            let errorPipe = Pipe()
+            process.standardError = errorPipe
+
+            do {
+                try process.run()
+            } catch {
+                completion(.failure(error))
+                return
+            }
+
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            if process.terminationStatus == 0 {
+                completion(.success(mountPoint))
+            } else {
+                let stderr = String(data: errorData, encoding: .utf8) ?? ""
+                logger.error("NFS mount failed: \(stderr, privacy: .public)")
+                completion(.failure(MountError.mountFailed(process.terminationStatus)))
+            }
+        }
+    }
+
     private func isMountAlive(_ path: String) -> Bool {
         var isAlive = false
         let semaphore = DispatchSemaphore(value: 0)
-        
-        // checking access or stat on a dead SMB mount can hang.
-        // We run it on a separate background thread with a timeout.
+
         DispatchQueue.global(qos: .background).async {
-            // "access" check usually fast, but if kernel hangs on SMB, this thread hangs.
-            // We use FileManager attributesOfItem which calls stat.
             if FileManager.default.isReadableFile(atPath: path) {
                 isAlive = true
             }
             semaphore.signal()
         }
-        
-        // Wait max 2 seconds for response
+
         let result = semaphore.wait(timeout: .now() + 2.0)
         if result == .timedOut {
-            return false // Consider dead if timed out
+            return false
         }
         return isAlive
     }

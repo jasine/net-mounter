@@ -53,7 +53,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/> <!-- This makes it a menu bar app (hidden from dock) if desired, set to false if you want dock icon -->
     <key>NSHighResolutionCapable</key>

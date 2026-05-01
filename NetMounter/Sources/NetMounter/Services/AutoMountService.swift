@@ -1,14 +1,14 @@
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.netmounter.app", category: "AutoMount")
 
 class AutoMountService: ObservableObject {
     private var appState: AppState
     private var networkMonitor: NetworkMonitor
     private var cancellables = Set<AnyCancellable>()
-    
-    // Track mounting status to avoid repetitive mount attempts
-    @Published var pendingMounts: Set<UUID> = []
-    
+
     // Store pending retry work items so we can cancel them if network changes
     private var retryWorkItems: [UUID: DispatchWorkItem] = [:]
     
@@ -45,7 +45,7 @@ class AutoMountService: ObservableObject {
     }
     
     func evaluateAutoMount(for fingerprint: NetworkFingerprint) {
-        print("Evaluating auto-mount for fingerprint: \(fingerprint)")
+        logger.info("Evaluating auto-mount for fingerprint: \(String(describing: fingerprint), privacy: .public)")
         
         // Cancel all pending retries as the network environment has changed
         cancelAllRetries()
@@ -54,8 +54,9 @@ class AutoMountService: ObservableObject {
             // Check if this server has a matching rule
             if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) }) {
                 // If already mounted, skip
-                if let path = MountingManager.shared.findExistingMountPath(for: URL(string: server.urlString)!) {
-                     print("Server \(server.alias) already mounted at \(path). Skipping auto-mount.")
+                guard let url = URL(string: server.urlString) else { continue }
+                if let path = MountingManager.shared.findExistingMountPath(for: url) {
+                     logger.debug("Server \(server.alias, privacy: .public) already mounted at \(path, privacy: .public). Skipping.")
                      continue
                 }
                 
@@ -67,24 +68,24 @@ class AutoMountService: ObservableObject {
     
     private func performPeriodicHealthCheck() {
         guard let currentFingerprint = networkMonitor.currentFingerprint else { 
-            print("No current network fingerprint available for periodic check.")
+            logger.debug("No current network fingerprint available for periodic check.")
             return 
         }
         
-        print("Starting periodic health check for servers...")
+        logger.info("Starting periodic health check for servers...")
         
         for server in appState.servers {
             // Check if this server has a matching rule for current network
             if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(currentFingerprint) }) {
                 
-                let serverURL = URL(string: server.urlString)!
+                guard let serverURL = URL(string: server.urlString) else { continue }
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
                     // Check if path is actually responsive (zombie check)
                     // MountingManager.shared.isMountAlive is private, we depend on MountingManager's internal check during mount
                     // But here we can do a quick check
-                    print("Periodic check: Server \(server.alias) is mounted at \(path).")
+                    logger.debug("Periodic check: \(server.alias, privacy: .public) mounted at \(path, privacy: .public).")
                 } else {
-                    print("Periodic check: Server \(server.alias) should be mounted but is NOT. Attempting recovery...")
+                    logger.warning("Periodic check: \(server.alias, privacy: .public) should be mounted but is NOT. Recovering...")
                     // Reset retry count for periodic check to give it a fresh chance
                     attemptMount(server, retryCount: 0)
                 }
@@ -99,26 +100,26 @@ class AutoMountService: ObservableObject {
             cancelRetry(for: server)
         }
         
-        print("Attempting auto-mount for: \(server.alias) (Attempt \(retryCount + 1))")
+        logger.info("Auto-mount \(server.alias, privacy: .public) attempt \(retryCount + 1)")
         
         // Verify connectivity first
-        ConnectionTester.shared.checkReachability(host: server.hostname) { [weak self] result in
+        ConnectionTester.shared.checkReachability(host: server.hostname, port: server.serverProtocol.defaultPort) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(true):
-                    print("Server \(server.hostname) is reachable. Mounting...")
+                    logger.info("\(server.hostname, privacy: .public) reachable. Mounting...")
                     MountingManager.shared.mount(config: server) { mountResult in
                         switch mountResult {
                         case .success(let path):
-                            print("Successfully mounted \(server.alias) at \(path)")
+                            logger.info("Mounted \(server.alias, privacy: .public) at \(path, privacy: .public)")
                             // Success, no need to retry
                         case .failure(let error):
-                            print("Failed to mount \(server.alias): \(error)")
+                            logger.error("Failed to mount \(server.alias, privacy: .public): \(error.localizedDescription, privacy: .public)")
                             self?.scheduleRetry(for: server, currentRetryCount: retryCount)
                         }
                     }
                 case .success(false), .failure:
-                    print("Server \(server.hostname) not reachable. Skipping.")
+                    logger.debug("\(server.hostname, privacy: .public) not reachable. Skipping.")
                     self?.scheduleRetry(for: server, currentRetryCount: retryCount)
                 }
             }
@@ -128,12 +129,12 @@ class AutoMountService: ObservableObject {
     private func scheduleRetry(for server: ServerConfig, currentRetryCount: Int) {
         let maxRetries = 5
         guard currentRetryCount < maxRetries else {
-            print("Max retries reached for \(server.alias). Giving up.")
+            logger.warning("Max retries reached for \(server.alias, privacy: .public). Giving up.")
             return
         }
         
         let delay: TimeInterval = 5.0
-        print("Scheduling retry for \(server.alias) in \(delay) seconds...")
+        logger.debug("Scheduling retry for \(server.alias, privacy: .public) in \(delay)s...")
         
         let workItem = DispatchWorkItem { [weak self] in
             self?.attemptMount(server, retryCount: currentRetryCount + 1)
