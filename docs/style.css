@@ -118,6 +118,8 @@ body {
     width: 30px;
     height: 30px;
     border-radius: 6px;
+    object-fit: contain;
+    display: block;
 }
 
 /* Buttons */
@@ -194,6 +196,25 @@ main {
 .version-info {
     font-size: 0.8rem;
     color: var(--text-secondary);
+}
+
+/* Brew Install Block */
+.brew-install {
+    display: inline-block;
+}
+
+.brew-install code {
+    display: inline-block;
+    background: rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 10px 16px !important;
+    border-radius: 12px !important;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem !important;
+    color: #30D158;
+    white-space: nowrap;
+    user-select: all;
+    letter-spacing: -0.02em;
 }
 
 /* Hero Mockup (CSS Only Interface) */
@@ -388,7 +409,7 @@ main {
 
 .protocol-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 20px;
 }
 
@@ -525,5 +546,9 @@ footer {
 
     .protocol-grid {
         grid-template-columns: repeat(2, 1fr);
+    }
+
+    .brew-install code {
+        font-size: 0.75rem !important;
     }
 }
