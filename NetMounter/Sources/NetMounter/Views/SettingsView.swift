@@ -125,7 +125,7 @@ struct SettingsView: View {
                                         Text("NetMounter")
                                             .font(.system(.title3, design: .rounded))
                                             .fontWeight(.semibold)
-                                        Text("Version 1.0.1")
+                                        Text("Version 1.0.2")
                                             .font(.subheadline)
                                             .foregroundColor(.secondary)
                                     }
