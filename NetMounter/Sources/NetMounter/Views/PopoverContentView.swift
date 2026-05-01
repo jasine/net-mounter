@@ -13,7 +13,7 @@ struct PopoverContentView: View {
             } else {
                 // 空视图：不消耗任何 CPU/GPU 资源
                 Color.clear
-                    .frame(width: 320, height: 400)
+                    .frame(width: 380, height: 400)
             }
         }
     }
