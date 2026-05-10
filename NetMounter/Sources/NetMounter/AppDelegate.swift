@@ -13,6 +13,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     private var statusIconTimer: AnyCancellable?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:replyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+
         // Initialize dependencies
         appState = AppState()
         autoMountService = AutoMountService(appState: appState)
@@ -80,13 +87,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     
     // MARK: - URL Scheme
 
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
-            handleIncomingURL(url)
-        }
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, replyEvent: NSAppleEventDescriptor) {
+        guard let urlString = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: urlString) else { return }
+        handleIncomingURL(url)
     }
 
-    private func handleIncomingURL(_ url: URL) {
+    func handleIncomingURL(_ url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.scheme == "netmounter",
               components.host == "add" else { return }
