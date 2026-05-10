@@ -72,9 +72,8 @@ class NetworkMonitor: ObservableObject {
             return
         }
 
-        // For wired networks, resolve gateway MAC on a separate queue
-        // to avoid blocking the NWPathMonitor callback queue.
-        if interfaceType == .wired {
+        // Always resolve gateway MAC as fallback when SSID is unavailable.
+        if ssid == nil {
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 let gatewayMac = Self.getDefaultGatewayMAC()
                 let fingerprint = NetworkFingerprint(
@@ -103,10 +102,16 @@ class NetworkMonitor: ObservableObject {
         }
     }
 
-    /// Resolve the default gateway's MAC address via `arp` for wired network fingerprinting.
+    private static func resolveCommand(_ candidates: [String]) -> String? {
+        candidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// Resolve the default gateway's MAC address via `arp` for network fingerprinting.
     private static func getDefaultGatewayMAC() -> String? {
-        // 1. Get default gateway IP from `route get default`
-        guard let gatewayIP = runCommand("/usr/sbin/route", arguments: ["-n", "get", "default"])
+        guard let routePath = resolveCommand(["/sbin/route", "/usr/sbin/route"]) else { return nil }
+        guard let arpPath = resolveCommand(["/usr/sbin/arp", "/sbin/arp"]) else { return nil }
+
+        guard let gatewayIP = runCommand(routePath, arguments: ["-n", "get", "default"])
             .components(separatedBy: "\n")
             .first(where: { $0.contains("gateway:") })?
             .components(separatedBy: ":")
@@ -115,7 +120,7 @@ class NetworkMonitor: ObservableObject {
               !gatewayIP.isEmpty else { return nil }
 
         // 2. Resolve MAC via `arp`
-        guard let arpLine = runCommand("/usr/sbin/arp", arguments: ["-n", gatewayIP])
+        guard let arpLine = runCommand(arpPath, arguments: ["-n", gatewayIP])
             .components(separatedBy: "\n")
             .first(where: { $0.contains(gatewayIP) }) else { return nil }
 

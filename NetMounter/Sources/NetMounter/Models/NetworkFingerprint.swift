@@ -11,8 +11,7 @@ struct NetworkFingerprint: Codable, Equatable, Hashable {
     var bssid: String? // Optional, for more specific matching
     var gatewayMac: String? // Fallback if SSID not available
     var interfaceType: InterfaceType
-    
-    // Helper to check if it matches another fingerprint (current network state)
+
     func matches(_ other: NetworkFingerprint) -> Bool {
         // Simple matching logic for now: SSID match takes priority
         if let selfSSID = ssid, let otherSSID = other.ssid {

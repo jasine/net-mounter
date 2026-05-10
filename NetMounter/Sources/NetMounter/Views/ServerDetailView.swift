@@ -63,10 +63,19 @@ struct ServerDetailView: View {
                     }
                 }
                 
-                Section(header: Text("Auto-Mount").foregroundColor(.secondary)) {
-                    Text("Auto-mount rules can be configured in settings.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                Section {
+                    Toggle("Auto-Mount", isOn: Binding(
+                        get: { !config.autoMountRules.isEmpty },
+                        set: { enabled in
+                            if enabled {
+                                addCurrentNetwork()
+                            } else {
+                                config.autoMountRules.removeAll()
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .disabled(NetworkMonitor.shared.currentFingerprint == nil && config.autoMountRules.isEmpty)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -96,6 +105,13 @@ struct ServerDetailView: View {
         }
     }
     
+    private func addCurrentNetwork() {
+        guard let fingerprint = NetworkMonitor.shared.currentFingerprint else { return }
+        let alreadyExists = config.autoMountRules.contains { $0.fingerprint.matches(fingerprint) }
+        guard !alreadyExists else { return }
+        config.autoMountRules.append(AutoMountRule(fingerprint: fingerprint))
+    }
+
     private func testConnection() {
         isTestRunning = true
         testResult = nil

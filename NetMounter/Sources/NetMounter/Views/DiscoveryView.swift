@@ -114,11 +114,16 @@ struct DiscoveryView: View {
     private func addServer(from server: DiscoveredServer, sharePath: String) {
         let lastComponent = URL(fileURLWithPath: sharePath).lastPathComponent
         let alias = sharePath.isEmpty ? server.name : lastComponent
+        var rules: [AutoMountRule] = []
+        if let fingerprint = NetworkMonitor.shared.currentFingerprint {
+            rules.append(AutoMountRule(fingerprint: fingerprint))
+        }
         let config = ServerConfig(
             alias: alias,
             serverProtocol: server.protocolType,
             hostname: server.host,
-            sharePath: sharePath
+            sharePath: sharePath,
+            autoMountRules: rules
         )
         appState.addServer(config)
 
