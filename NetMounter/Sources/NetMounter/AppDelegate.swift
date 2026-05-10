@@ -8,12 +8,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     // Dependencies
     var appState: AppState!
     var autoMountService: AutoMountService!
+    var sleepWakeManager: SleepWakeManager!
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize dependencies
         appState = AppState()
         autoMountService = AutoMountService(appState: appState)
-        
+        sleepWakeManager = SleepWakeManager(
+            appState: appState,
+            networkMonitor: .shared,
+            autoMountService: autoMountService
+        )
+
         // Setup Popover
         popover = NSPopover()
         popover.contentSize = NSSize(width: 320, height: 400)
