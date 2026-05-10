@@ -78,6 +78,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         }
     }
     
+    // MARK: - URL Scheme
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            handleIncomingURL(url)
+        }
+    }
+
+    private func handleIncomingURL(_ url: URL) {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "netmounter",
+              components.host == "add" else { return }
+
+        let params = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+                item.value.map { (item.name, $0) }
+            }
+        )
+
+        guard let host = params["host"], !host.isEmpty else { return }
+
+        let proto = NetworkProtocol(rawValue: params["proto"] ?? "smb") ?? .smb
+        let share = params["share"] ?? ""
+        let alias = params["alias"] ?? host
+
+        let alert = NSAlert()
+        alert.messageText = "Add Server?"
+        alert.informativeText = "Add \(proto.displayName) server \"\(alias)\" (\(host)/\(share))?"
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .informational
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let config = ServerConfig(
+                alias: alias,
+                serverProtocol: proto,
+                hostname: host,
+                sharePath: share
+            )
+            appState.addServer(config)
+        }
+    }
+
     // MARK: - NSPopoverDelegate
     func popoverWillShow(_ notification: Notification) {
         appState.isUIVisible = true

@@ -58,6 +58,17 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <true/> <!-- This makes it a menu bar app (hidden from dock) if desired, set to false if you want dock icon -->
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>netmounter</string>
+            </array>
+            <key>CFBundleURLName</key>
+            <string>com.netmounter.app</string>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF

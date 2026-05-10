@@ -55,7 +55,19 @@ struct ServerConfig: Codable, Identifiable {
     // Auto-mount rules
     var autoMountRules: [AutoMountRule] = []
     
-    // UI Helper to construct full URL string
+    var shareURL: URL? {
+        var components = URLComponents()
+        components.scheme = "netmounter"
+        components.host = "add"
+        components.queryItems = [
+            URLQueryItem(name: "host", value: hostname),
+            URLQueryItem(name: "proto", value: serverProtocol.rawValue),
+            URLQueryItem(name: "share", value: sharePath),
+            URLQueryItem(name: "alias", value: alias),
+        ]
+        return components.url
+    }
+
     var urlString: String {
         var components = URLComponents()
         components.scheme = serverProtocol.scheme
