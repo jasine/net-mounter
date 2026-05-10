@@ -178,7 +178,7 @@ class MountingManager {
         }
     }
 
-    private func forceUnmount(path: String) {
+    func forceUnmount(path: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         process.arguments = ["unmount", "force", path]
@@ -251,7 +251,7 @@ class MountingManager {
         }
     }
 
-    private func isMountAlive(_ path: String) -> Bool {
+    func isMountAlive(_ path: String) -> Bool {
         var isAlive = false
         let semaphore = DispatchSemaphore(value: 0)
 

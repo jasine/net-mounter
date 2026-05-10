@@ -80,10 +80,13 @@ class AutoMountService: ObservableObject {
                 
                 guard let serverURL = URL(string: server.urlString) else { continue }
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
-                    // Check if path is actually responsive (zombie check)
-                    // MountingManager.shared.isMountAlive is private, we depend on MountingManager's internal check during mount
-                    // But here we can do a quick check
-                    logger.debug("Periodic check: \(server.alias, privacy: .public) mounted at \(path, privacy: .public).")
+                    if MountingManager.shared.isMountAlive(path) {
+                        logger.debug("Periodic check: \(server.alias, privacy: .public) alive at \(path, privacy: .public).")
+                    } else {
+                        logger.warning("Periodic check: \(server.alias, privacy: .public) is zombie at \(path, privacy: .public). Recovering...")
+                        MountingManager.shared.forceUnmount(path: path)
+                        attemptMount(server, retryCount: 0)
+                    }
                 } else {
                     logger.warning("Periodic check: \(server.alias, privacy: .public) should be mounted but is NOT. Recovering...")
                     // Reset retry count for periodic check to give it a fresh chance
