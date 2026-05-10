@@ -117,6 +117,41 @@ class MountingManager {
         return nil
     }
 
+    func getAllNetworkMounts(matching servers: [ServerConfig]) -> [MountSnapshot] {
+        let keys: [URLResourceKey] = [.volumeURLForRemountingKey, .volumeIsLocalKey]
+        guard let mountedURLs = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: keys, options: []
+        ) else { return [] }
+
+        var snapshots: [MountSnapshot] = []
+
+        for mountURL in mountedURLs {
+            guard let values = try? mountURL.resourceValues(forKeys: Set(keys)) else { continue }
+
+            // Skip local volumes
+            if values.volumeIsLocal == true { continue }
+
+            guard let remountURL = values.volumeURLForRemounting else { continue }
+
+            let snapshot = MountSnapshot(
+                serverID: nil,
+                volumePath: mountURL.path,
+                remountURL: remountURL
+            )
+
+            // Try to match against known server configs
+            let matchedServer = servers.first { snapshot.matches($0) }
+            let finalSnapshot = MountSnapshot(
+                serverID: matchedServer?.id,
+                volumePath: mountURL.path,
+                remountURL: remountURL
+            )
+            snapshots.append(finalSnapshot)
+        }
+
+        return snapshots
+    }
+
     func unmount(mountPath: String, completion: @escaping (Error?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
