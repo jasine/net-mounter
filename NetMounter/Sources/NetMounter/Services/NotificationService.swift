@@ -50,6 +50,14 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Notification Events
 
+    func notifyMountSucceeded(server: ServerConfig) {
+        let content = UNMutableNotificationContent()
+        content.title = String(localized: "Mount Succeeded")
+        content.body = String(localized: "\(server.alias) is now connected")
+        content.sound = .default
+        send(id: "mount-succeeded-\(server.id)", content: content)
+    }
+
     func notifyMountFailed(server: ServerConfig) {
         let content = UNMutableNotificationContent()
         content.title = String(localized: "Mount Failed")

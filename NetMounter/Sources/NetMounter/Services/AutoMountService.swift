@@ -116,7 +116,7 @@ class AutoMountService: ObservableObject {
                         switch mountResult {
                         case .success(let path):
                             logger.info("Mounted \(server.alias, privacy: .public) at \(path, privacy: .public)")
-                            // Success, no need to retry
+                            NotificationService.shared.notifyMountSucceeded(server: server)
                         case .failure(let error):
                             logger.error("Failed to mount \(server.alias, privacy: .public): \(error.localizedDescription, privacy: .public)")
                             self?.scheduleRetry(for: server, currentRetryCount: retryCount)
