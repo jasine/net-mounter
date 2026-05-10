@@ -4,6 +4,20 @@ import os
 
 private let logger = Logger(subsystem: "com.netmounter.app", category: "AppState")
 
+enum MountStatus {
+    case idle
+    case allConnected
+    case hasFailed
+
+    var iconName: String {
+        switch self {
+        case .idle: return "externaldrive.badge.wifi"
+        case .allConnected: return "externaldrive.fill.badge.checkmark"
+        case .hasFailed: return "externaldrive.badge.exclamationmark"
+        }
+    }
+}
+
 class AppState: ObservableObject {
     @Published var servers: [ServerConfig] = []
     @Published var isUIVisible: Bool = false
@@ -46,6 +60,23 @@ class AppState: ObservableObject {
         }
     }
     
+    func computeMountStatus(fingerprint: NetworkFingerprint?) -> MountStatus {
+        guard let fingerprint = fingerprint else { return .idle }
+
+        let matchingServers = servers.filter { server in
+            server.autoMountRules.contains { $0.enabled && $0.fingerprint.matches(fingerprint) }
+        }
+
+        guard !matchingServers.isEmpty else { return .idle }
+
+        let allMounted = matchingServers.allSatisfy { server in
+            guard let url = URL(string: server.urlString) else { return false }
+            return MountingManager.shared.findExistingMountPath(for: url) != nil
+        }
+
+        return allMounted ? .allConnected : .hasFailed
+    }
+
     private func loadConfig() {
         do {
             let data = try Data(contentsOf: configURL)

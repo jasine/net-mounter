@@ -1,14 +1,16 @@
 import Cocoa
 import SwiftUI
+import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
-    
+
     // Dependencies
     var appState: AppState!
     var autoMountService: AutoMountService!
     var sleepWakeManager: SleepWakeManager!
+    private var statusIconTimer: AnyCancellable?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize dependencies
@@ -42,6 +44,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
             button.action = #selector(togglePopover(_:))
             button.target = self
         }
+
+        statusIconTimer = Timer.publish(every: 10, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.updateStatusIcon() }
+    }
+
+    private func updateStatusIcon() {
+        let status = appState.computeMountStatus(fingerprint: NetworkMonitor.shared.currentFingerprint)
+        statusItem.button?.image = NSImage(
+            systemSymbolName: status.iconName,
+            accessibilityDescription: "NetMounter"
+        )
     }
     
     @objc func togglePopover(_ sender: AnyObject?) {
