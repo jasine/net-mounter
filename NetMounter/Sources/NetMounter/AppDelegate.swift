@@ -22,6 +22,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
             autoMountService: autoMountService
         )
 
+        NotificationService.shared.requestAuthorization()
+        NotificationService.shared.onRetry = { [weak self] serverID in
+            guard let self = self,
+                  self.appState.servers.contains(where: { $0.id == serverID }),
+                  let fingerprint = NetworkMonitor.shared.currentFingerprint else { return }
+            self.autoMountService.evaluateAutoMount(for: fingerprint)
+        }
+
         // Setup Popover
         popover = NSPopover()
         popover.contentSize = NSSize(width: 320, height: 400)

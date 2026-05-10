@@ -85,6 +85,7 @@ class AutoMountService: ObservableObject {
                     } else {
                         logger.warning("Periodic check: \(server.alias, privacy: .public) is zombie at \(path, privacy: .public). Recovering...")
                         MountingManager.shared.forceUnmount(path: path)
+                        NotificationService.shared.notifyZombieHealed(server: server)
                         attemptMount(server, retryCount: 0)
                     }
                 } else {
@@ -133,6 +134,7 @@ class AutoMountService: ObservableObject {
         let maxRetries = 5
         guard currentRetryCount < maxRetries else {
             logger.warning("Max retries reached for \(server.alias, privacy: .public). Giving up.")
+            NotificationService.shared.notifyMountFailed(server: server)
             return
         }
         
