@@ -7,14 +7,25 @@ private let logger = Logger(subsystem: "com.netmounter.app", category: "Notifica
 class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationService()
 
-    private let center = UNUserNotificationCenter.current()
     private static let retryActionID = "RETRY_MOUNT"
     private static let categoryWithRetry = "MOUNT_FAILURE"
 
+    private var center: UNUserNotificationCenter?
     var onRetry: ((UUID) -> Void)?
 
     override init() {
         super.init()
+    }
+
+    func setup() {
+        guard Bundle.main.bundleIdentifier != nil else {
+            logger.warning("No bundle identifier — notifications disabled")
+            return
+        }
+
+        let notificationCenter = UNUserNotificationCenter.current()
+        self.center = notificationCenter
+
         let retryAction = UNNotificationAction(
             identifier: Self.retryActionID,
             title: String(localized: "Retry"),
@@ -25,12 +36,10 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
             actions: [retryAction],
             intentIdentifiers: []
         )
-        center.setNotificationCategories([category])
-        center.delegate = self
-    }
+        notificationCenter.setNotificationCategories([category])
+        notificationCenter.delegate = self
 
-    func requestAuthorization() {
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
                 logger.error("Notification auth error: \(error.localizedDescription, privacy: .public)")
             } else if !granted {
@@ -77,6 +86,7 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func send(id: String, content: UNMutableNotificationContent) {
+        guard let center = center else { return }
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         center.add(request) { error in
             if let error = error {

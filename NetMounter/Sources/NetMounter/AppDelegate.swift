@@ -22,7 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
             autoMountService: autoMountService
         )
 
-        NotificationService.shared.requestAuthorization()
+        NotificationService.shared.setup()
         NotificationService.shared.onRetry = { [weak self] serverID in
             guard let self = self,
                   self.appState.servers.contains(where: { $0.id == serverID }),
