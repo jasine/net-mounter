@@ -67,7 +67,72 @@ class SleepWakeManager {
     // MARK: - Wake
 
     @objc private func handleDidWake(_ notification: Notification) {
-        // Wake flow will be implemented in Task 4
+        logger.info("System did wake — waiting for network")
+
+        guard !sleepSnapshot.isEmpty else {
+            logger.info("No snapshot to restore, skipping reconnect")
+            return
+        }
+
+        isAwaitingReconnect = true
+
+        // Watch for network to become available
+        wakeCancellable = networkMonitor.$currentFingerprint
+            .compactMap { $0 }
+            .first()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] fingerprint in
+                self?.handleNetworkReady(fingerprint: fingerprint)
+            }
+
+        // Safety timeout — don't wait forever
+        let timeoutWork = DispatchWorkItem { [weak self] in
+            guard let self = self, self.isAwaitingReconnect else { return }
+            logger.warning("Wake network timeout (30s) — abandoning reconnect")
+            self.cancelWakeWait()
+        }
+        wakeTimeoutWork = timeoutWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0, execute: timeoutWork)
+    }
+
+    private func handleNetworkReady(fingerprint: NetworkFingerprint) {
+        logger.info("Network ready after wake — restoring mounts")
+        cancelWakeWait()
+
+        // Path 1: Managed servers — delegate to AutoMountService
+        autoMountService.evaluateAutoMount(for: fingerprint)
+
+        // Path 2: Manual mounts — best-effort remount via remountURL
+        let manualMounts = sleepSnapshot.filter { $0.serverID == nil }
+        for snapshot in manualMounts {
+            remountManual(snapshot: snapshot)
+        }
+
+        sleepSnapshot = []
+    }
+
+    private func remountManual(snapshot: MountSnapshot) {
+        DispatchQueue.global(qos: .utility).async {
+            var mountpoints: Unmanaged<CFArray>?
+            let result = NetFSMountURLSync(
+                snapshot.remountURL as CFURL,
+                nil, nil, nil, nil, nil,
+                &mountpoints
+            )
+            if result == 0 {
+                logger.info("Restored manual mount: \(snapshot.volumePath, privacy: .public)")
+            } else {
+                logger.debug("Could not restore manual mount \(snapshot.volumePath, privacy: .public) (error \(result))")
+            }
+        }
+    }
+
+    private func cancelWakeWait() {
+        isAwaitingReconnect = false
+        wakeCancellable?.cancel()
+        wakeCancellable = nil
+        wakeTimeoutWork?.cancel()
+        wakeTimeoutWork = nil
     }
 
     // MARK: - Unmount Helpers
@@ -111,5 +176,10 @@ class SleepWakeManager {
         process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
+    }
+
+    deinit {
+        cancelWakeWait()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 }
