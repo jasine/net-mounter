@@ -38,7 +38,7 @@
                 <div class="cta-group">
                     <a href="https://github.com/jasine/net-mounter/releases" class="glass-button primary"
                         id="download-btn" data-i18n="downloadBtn">Download for macOS</a>
-                    <span class="version-info" id="version-info" data-i18n="versionInfo">v1.0.1 • macOS 14+</span>
+                    <span class="version-info" id="version-info" data-i18n="versionInfo">v1.0.2 • macOS 14+</span>
                 </div>
                 <div class="brew-install" style="margin-top: 1rem;">
                     <code data-i18n="brewCmd">brew tap jasine/tap && brew install --cask netmounter</code>
@@ -119,6 +119,31 @@
                 <div class="icon">🚀</div>
                 <h3 data-i18n="feature5Title">Launch at Login</h3>
                 <p data-i18n="feature5Desc">Start automatically with your Mac. Always ready when you need it.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🌐</div>
+                <h3 data-i18n="feature8Title">VPN Awareness</h3>
+                <p data-i18n="feature8Desc">Auto-detects VPN routing. Mounts when VPN connects, unmounts when it disconnects.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">😴</div>
+                <h3 data-i18n="feature9Title">Sleep/Wake Reconnect</h3>
+                <p data-i18n="feature9Desc">Gracefully disconnects before sleep and auto-reconnects all mounts after wake.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🔗</div>
+                <h3 data-i18n="feature10Title">URL Scheme Sharing</h3>
+                <p data-i18n="feature10Desc">Share server configs as netmounter:// links. One click to import for your whole team.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🔔</div>
+                <h3 data-i18n="feature11Title">Smart Notifications</h3>
+                <p data-i18n="feature11Desc">Get notified on mount success, failure, and recovery. Retry failed mounts from the notification.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="icon">🧟</div>
+                <h3 data-i18n="feature12Title">Zombie Mount Healing</h3>
+                <p data-i18n="feature12Desc">Automatically detects unresponsive mounts and recovers them without manual intervention.</p>
             </div>
         </section>
 
@@ -208,6 +233,30 @@
                             <td class="yes">✓</td>
                             <td class="yes">✓</td>
                             <td class="yes">✓</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonVPN">VPN-Aware Auto-Mount</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonSleepWake">Sleep/Wake Reconnect</td>
+                            <td class="yes">✓</td>
+                            <td class="partial">Partial</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonURLScheme">URL Scheme Sharing</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
+                        </tr>
+                        <tr>
+                            <td data-i18n="comparisonNotifications">Mount Notifications</td>
+                            <td class="yes">✓</td>
+                            <td class="no">✗</td>
+                            <td class="no">✗</td>
                         </tr>
                     </tbody>
                 </table>

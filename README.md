@@ -26,6 +26,12 @@
 - 🔌 **Multi-Protocol** - SMB, AFP, NFS, WebDAV
 - 📡 **Network Discovery** - Auto-discover servers and shares via Bonjour/mDNS
 - 🤖 **Auto-Mount** - Automatically mount shares based on network environment
+- 🌐 **VPN Awareness** - Auto-detect VPN routing and mount/unmount servers accordingly
+- 😴 **Sleep/Wake Reconnect** - Gracefully disconnect before sleep and auto-reconnect on wake
+- 🧟 **Zombie Mount Healing** - Detect and recover unresponsive mounts automatically
+- 🔔 **Notifications** - Get notified on mount success, failure, and recovery events
+- 🔗 **URL Scheme Sharing** - Share server configs via `netmounter://` links for easy team setup
+- 📊 **Dynamic Status Icon** - Menu bar icon reflects real-time mount status at a glance
 - 🔐 **Secure Storage** - Passwords securely stored in macOS Keychain
 - 🎨 **Liquid Glass UI** - Beautiful frosted glass interface design
 - 🚀 **Launch at Login** - Support for automatic startup
@@ -78,6 +84,36 @@ NetMounter can automatically mount shares based on network environment:
 2. Add auto-mount rules for a server
 3. Select target network (SSID or wired connection)
 4. Automatically mounts when connected to specified network
+
+## 🌐 VPN Awareness
+
+NetMounter automatically detects when your servers are routed through a VPN:
+
+- Checks the system routing table to determine if a server's traffic goes through a VPN interface (`utun`, `ipsec`, `ppp`)
+- When VPN connects and a server becomes VPN-routed, it auto-mounts (if auto-mount is enabled)
+- When VPN disconnects, VPN-routed servers are automatically unmounted
+- No manual configuration needed — works with any VPN client
+
+## 😴 Sleep/Wake Reconnect
+
+Never lose your network mounts after waking from sleep:
+
+- Before sleep: gracefully disconnects all network mounts to prevent stale/zombie volumes
+- After wake: waits for network to stabilize, then automatically reconnects managed and manual mounts
+- Includes a 30-second timeout for network recovery with notification on failure
+
+## 🔗 URL Scheme Sharing
+
+Share server configurations with your team via links:
+
+```
+netmounter://add?host=192.168.1.100&proto=smb&share=shared&alias=NAS
+```
+
+- Click the link icon on any server card to copy its share link
+- Opening the link shows a confirmation dialog before adding the server
+- Duplicate servers are automatically detected and rejected
+- Credentials are never included in URLs
 
 ## 🔒 Security
 
