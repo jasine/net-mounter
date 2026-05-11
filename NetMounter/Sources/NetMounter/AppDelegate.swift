@@ -110,6 +110,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         let share = params["share"] ?? ""
         let alias = params["alias"] ?? host
 
+        let isDuplicate = appState.servers.contains {
+            $0.hostname.lowercased() == host.lowercased()
+                && $0.serverProtocol == proto
+                && $0.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).lowercased()
+                    == share.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).lowercased()
+        }
+
+        if isDuplicate {
+            let alert = NSAlert()
+            alert.messageText = "Server Already Exists"
+            alert.informativeText = "\(proto.displayName) server \"\(alias)\" (\(host)/\(share)) is already configured."
+            alert.addButton(withTitle: "OK")
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+
         let alert = NSAlert()
         alert.messageText = "Add Server?"
         alert.informativeText = "Add \(proto.displayName) server \"\(alias)\" (\(host)/\(share))?"
