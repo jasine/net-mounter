@@ -232,7 +232,7 @@ struct ServerRow: View {
                 RoundedRectangle(cornerRadius: 20)
                     .stroke(.white.opacity(0.2), lineWidth: 1) // Edge Shine
                 if showCopied {
-                    Text("Share link copied")
+                    Text(String(localized: "Share link copied"))
                         .font(.caption)
                         .fontWeight(.medium)
                         .padding(.horizontal, 12)

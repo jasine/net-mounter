@@ -66,11 +66,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     }
 
     private func updateStatusIcon() {
-        let status = appState.computeMountStatus(fingerprint: NetworkMonitor.shared.currentFingerprint)
-        statusItem.button?.image = NSImage(
-            systemSymbolName: status.iconName,
-            accessibilityDescription: "NetMounter"
-        )
+        let fingerprint = NetworkMonitor.shared.currentFingerprint
+        let servers = appState.servers
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let status = AppState.computeMountStatus(servers: servers, fingerprint: fingerprint)
+            DispatchQueue.main.async {
+                self?.statusItem.button?.image = NSImage(
+                    systemSymbolName: status.iconName,
+                    accessibilityDescription: "NetMounter"
+                )
+            }
+        }
     }
     
     @objc func togglePopover(_ sender: AnyObject?) {
@@ -93,7 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         handleIncomingURL(url)
     }
 
-    func handleIncomingURL(_ url: URL) {
+    private func handleIncomingURL(_ url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.scheme == "netmounter",
               components.host == "add" else { return }

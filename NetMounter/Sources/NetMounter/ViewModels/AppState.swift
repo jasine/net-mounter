@@ -60,11 +60,14 @@ class AppState: ObservableObject {
         }
     }
     
-    func computeMountStatus(fingerprint: NetworkFingerprint?) -> MountStatus {
-        guard let fingerprint = fingerprint else { return .idle }
-
+    static func computeMountStatus(servers: [ServerConfig], fingerprint: NetworkFingerprint?) -> MountStatus {
         let matchingServers = servers.filter { server in
-            server.autoMountRules.contains { $0.enabled && $0.fingerprint.matches(fingerprint) }
+            guard server.autoMountRules.contains(where: { $0.enabled }) else { return false }
+            let fingerprintMatch = fingerprint.map { fp in
+                server.autoMountRules.contains { $0.enabled && $0.fingerprint.matches(fp) }
+            } ?? false
+            let vpnMatch = NetworkMonitor.shared.isVPNRouted(host: server.hostname)
+            return fingerprintMatch || vpnMatch
         }
 
         guard !matchingServers.isEmpty else { return .idle }

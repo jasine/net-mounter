@@ -89,8 +89,11 @@ class SleepWakeManager {
         let timeoutWork = DispatchWorkItem { [weak self] in
             guard let self = self, self.isAwaitingReconnect else { return }
             logger.warning("Wake network timeout (30s) — abandoning reconnect")
-            NotificationService.shared.notifyWakeReconnectFailed(count: self.sleepSnapshot.count)
+            let count = self.sleepSnapshot.count
             self.cancelWakeWait()
+            if count > 0 {
+                NotificationService.shared.notifyWakeReconnectFailed(count: count)
+            }
         }
         wakeTimeoutWork = timeoutWork
         DispatchQueue.main.asyncAfter(deadline: .now() + 30.0, execute: timeoutWork)
@@ -112,7 +115,9 @@ class SleepWakeManager {
         }
 
         sleepSnapshot = []
-        NotificationService.shared.notifyWakeReconnected(count: snapshotCount)
+        if snapshotCount > 0 {
+            NotificationService.shared.notifyWakeReconnected(count: snapshotCount)
+        }
     }
 
     private func remountManual(snapshot: MountSnapshot) {

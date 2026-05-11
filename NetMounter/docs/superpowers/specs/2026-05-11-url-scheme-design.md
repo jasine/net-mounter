@@ -26,18 +26,19 @@ Credentials are never included in URLs — users configure them in-app after imp
 ## Import Flow
 
 1. User clicks `netmounter://add?...` link in browser, Slack, email, etc.
-2. macOS launches NetMounter and calls `application(_:open:)`
+2. macOS launches NetMounter; `NSAppleEventManager` dispatches `kAEGetURL` event
 3. App parses URL parameters, validates `host` is present
-4. Shows `NSAlert` confirmation dialog with server details
-5. User confirms → `ServerConfig` created → `appState.addServer()`
-6. User cancels → no action
+4. Checks for duplicate (same host + protocol + share path) — shows "already exists" alert if found
+5. Shows `NSAlert` confirmation dialog with server details
+6. User confirms → `ServerConfig` created → `appState.addServer()`
+7. User cancels → no action
 
 ## Share Flow
 
-1. User clicks "Share" button in `ServerDetailView`
+1. User clicks share (link icon) button on the server card in `ServerListView`
 2. App generates `netmounter://` URL from `ServerConfig.shareURL`
 3. URL copied to system clipboard (`NSPasteboard`)
-4. Button briefly shows "Copied!" feedback
+4. Toast overlay shows "Share link copied" with fade animation, auto-dismisses after 2 seconds
 
 ## URL Scheme Registration
 
@@ -62,8 +63,8 @@ Add `CFBundleURLTypes` to Info.plist in `package_app.sh`:
 | File | Change |
 |------|--------|
 | `Models/ServerConfig.swift` | Add `shareURL` computed property |
-| `Views/ServerDetailView.swift` | Add "Share" button with clipboard copy |
-| `AppDelegate.swift` | Add `application(_:open:)` with URL parsing and confirmation alert |
+| `Views/ServerListView.swift` | Add share button on each server card with toast overlay |
+| `AppDelegate.swift` | Register `NSAppleEventManager` handler for URL parsing, dedup check, and confirmation alert |
 | `package_app.sh` | Add `CFBundleURLTypes` to generated Info.plist |
 
 ## Security

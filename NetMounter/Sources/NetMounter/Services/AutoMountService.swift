@@ -53,12 +53,29 @@ class AutoMountService: ObservableObject {
         // Cancel all pending retries as the network environment has changed
         cancelAllRetries()
 
-        for server in appState.servers {
-            guard !server.autoMountRules.isEmpty else { continue }
+        let servers = appState.servers.filter { !$0.autoMountRules.isEmpty }
+        guard !servers.isEmpty else { return }
+
+        // Resolve VPN routes on background thread to avoid blocking UI
+        let hostnames = servers.map { $0.hostname }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            var vpnResults: [String: Bool] = [:]
+            for host in hostnames {
+                vpnResults[host] = self.networkMonitor.isVPNRouted(host: host)
+            }
+            DispatchQueue.main.async {
+                self.processAutoMount(servers: servers, fingerprint: fingerprint, vpnResults: vpnResults)
+            }
+        }
+    }
+
+    private func processAutoMount(servers: [ServerConfig], fingerprint: NetworkFingerprint, vpnResults: [String: Bool]) {
+        for server in servers {
             guard let url = URL(string: server.urlString) else { continue }
 
             let matchesFingerprint = server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) })
-            let isVPN = networkMonitor.isVPNRouted(host: server.hostname)
+            let isVPN = vpnResults[server.hostname] ?? false
 
             if matchesFingerprint || (isVPN && server.autoMountRules.contains(where: { $0.enabled })) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
@@ -69,7 +86,6 @@ class AutoMountService: ObservableObject {
                 if isVPN { vpnMountedServerIDs.insert(server.id) }
                 attemptMount(server)
             } else if !isVPN && vpnMountedServerIDs.contains(server.id) {
-                // VPN disconnected — unmount servers that were VPN-routed
                 vpnMountedServerIDs.remove(server.id)
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
                     logger.info("VPN disconnected, unmounting \(server.alias, privacy: .public)")
