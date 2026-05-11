@@ -228,8 +228,22 @@ struct ServerRow: View {
         .background(.regularMaterial) // Glass Card Body
         .cornerRadius(20)
         .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(.white.opacity(0.2), lineWidth: 1) // Edge Shine
+            ZStack {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(.white.opacity(0.2), lineWidth: 1) // Edge Shine
+                if showCopied {
+                    Text("Share link copied")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.thickMaterial)
+                        .cornerRadius(8)
+                        .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: showCopied)
         )
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
         .contentShape(Rectangle())
