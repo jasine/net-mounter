@@ -116,11 +116,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         let share = params["share"] ?? ""
         let alias = params["alias"] ?? host
 
+        let normalizedShare = share.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).lowercased()
         let isDuplicate = appState.servers.contains {
             $0.hostname.lowercased() == host.lowercased()
                 && $0.serverProtocol == proto
-                && $0.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).lowercased()
-                    == share.trimmingCharacters(in: CharacterSet(charactersIn: "/\\")).lowercased()
+                && $0.normalizedSharePath.lowercased() == normalizedShare
         }
 
         if isDuplicate {

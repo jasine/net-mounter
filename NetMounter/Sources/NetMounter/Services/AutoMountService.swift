@@ -53,7 +53,7 @@ class AutoMountService: ObservableObject {
         // Cancel all pending retries as the network environment has changed
         cancelAllRetries()
 
-        let servers = appState.servers.filter { !$0.autoMountRules.isEmpty }
+        let servers = appState.servers.filter { $0.hasEnabledAutoMountRules }
         guard !servers.isEmpty else { return }
 
         // Resolve VPN routes on background thread to avoid blocking UI
@@ -71,13 +71,14 @@ class AutoMountService: ObservableObject {
     }
 
     private func processAutoMount(servers: [ServerConfig], fingerprint: NetworkFingerprint, vpnResults: [String: Bool]) {
+        vpnMountedServerIDs.formIntersection(Set(servers.map(\.id)))
+
         for server in servers {
             guard let url = URL(string: server.urlString) else { continue }
 
-            let matchesFingerprint = server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) })
             let isVPN = vpnResults[server.hostname] ?? false
 
-            if matchesFingerprint || (isVPN && server.autoMountRules.contains(where: { $0.enabled })) {
+            if server.shouldAutoMount(for: fingerprint, isVPN: isVPN) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
                     logger.debug("Server \(server.alias, privacy: .public) already mounted at \(path, privacy: .public). Skipping.")
                     if isVPN { vpnMountedServerIDs.insert(server.id) }
@@ -105,7 +106,7 @@ class AutoMountService: ObservableObject {
         
         for server in appState.servers {
             // Check if this server has a matching rule for current network
-            if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(currentFingerprint) }) {
+            if server.shouldAutoMount(for: currentFingerprint, isVPN: networkMonitor.isVPNRouted(host: server.hostname)) {
                 
                 guard let serverURL = URL(string: server.urlString) else { continue }
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
@@ -114,8 +115,9 @@ class AutoMountService: ObservableObject {
                     } else {
                         logger.warning("Periodic check: \(server.alias, privacy: .public) is zombie at \(path, privacy: .public). Recovering...")
                         MountingManager.shared.forceUnmount(path: path)
-                        NotificationService.shared.notifyZombieHealed(server: server)
-                        attemptMount(server, retryCount: 0)
+                        attemptMount(server, retryCount: 0, onSuccess: {
+                            NotificationService.shared.notifyZombieHealed(server: server)
+                        })
                     }
                 } else {
                     logger.warning("Periodic check: \(server.alias, privacy: .public) should be mounted but is NOT. Recovering...")
@@ -126,7 +128,7 @@ class AutoMountService: ObservableObject {
         }
     }
     
-    private func attemptMount(_ server: ServerConfig, retryCount: Int = 0) {
+    private func attemptMount(_ server: ServerConfig, retryCount: Int = 0, onSuccess: (() -> Void)? = nil) {
         // If this is a fresh attempt (retryCount == 0), cancel any existing retry for this server
         // to avoid double-mounting if evaluateAutoMount is called rapidly (though debounced).
         if retryCount == 0 {
@@ -146,6 +148,7 @@ class AutoMountService: ObservableObject {
                         case .success(let path):
                             logger.info("Mounted \(server.alias, privacy: .public) at \(path, privacy: .public)")
                             NotificationService.shared.notifyMountSucceeded(server: server)
+                            onSuccess?()
                         case .failure(let error):
                             logger.error("Failed to mount \(server.alias, privacy: .public): \(error.localizedDescription, privacy: .public)")
                             self?.scheduleRetry(for: server, currentRetryCount: retryCount)

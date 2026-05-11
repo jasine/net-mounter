@@ -11,7 +11,7 @@ struct MountSnapshot {
             return false
         }
         let configHost = config.hostname.lowercased()
-        let configShare = config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        let configShare = config.normalizedSharePath
         return snapshotHost == configHost && snapshotShare == configShare
     }
 }

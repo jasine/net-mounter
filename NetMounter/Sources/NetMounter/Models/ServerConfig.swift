@@ -54,6 +54,22 @@ struct ServerConfig: Codable, Identifiable {
     
     // Auto-mount rules
     var autoMountRules: [AutoMountRule] = []
+
+    var normalizedSharePath: String {
+        sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+    }
+
+    var hasEnabledAutoMountRules: Bool {
+        autoMountRules.contains { $0.enabled }
+    }
+
+    func shouldAutoMount(for fingerprint: NetworkFingerprint?, isVPN: Bool) -> Bool {
+        guard hasEnabledAutoMountRules else { return false }
+        let fingerprintMatch = fingerprint.map { fp in
+            autoMountRules.contains { $0.enabled && $0.fingerprint.matches(fp) }
+        } ?? false
+        return fingerprintMatch || isVPN
+    }
     
     var shareURL: URL? {
         var components = URLComponents()
@@ -73,9 +89,7 @@ struct ServerConfig: Codable, Identifiable {
         components.scheme = serverProtocol.scheme
         components.host = hostname
         
-        // Sanitize share path: remove leading/trailing slashes and backslashes
-        let dirtyPath = sharePath
-        let cleanPath = dirtyPath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        let cleanPath = normalizedSharePath
         
         // Path must start with / for URLComponents
         let pathToAdd = "/\(cleanPath)"

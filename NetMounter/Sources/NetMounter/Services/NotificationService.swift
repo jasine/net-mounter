@@ -51,50 +51,46 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - Notification Events
 
     func notifyMountSucceeded(server: ServerConfig) {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Mount Succeeded")
-        content.body = String(localized: "\(server.alias) is now connected")
-        content.sound = .default
-        send(id: "mount-succeeded-\(server.id)", content: content)
+        send(id: "mount-succeeded-\(server.id)",
+             title: String(localized: "Mount Succeeded"),
+             body: String(localized: "\(server.alias) is now connected"))
     }
 
-    func notifyMountFailed(server: ServerConfig) {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Mount Failed")
-        content.body = String(localized: "\(server.alias) failed after 5 retries")
-        content.sound = .default
-        content.categoryIdentifier = Self.categoryWithRetry
-        content.userInfo = ["serverID": server.id.uuidString]
-        send(id: "mount-failed-\(server.id)", content: content)
+    func notifyMountFailed(server: ServerConfig, retries: Int = 5) {
+        send(id: "mount-failed-\(server.id)",
+             title: String(localized: "Mount Failed"),
+             body: String(localized: "\(server.alias) failed after \(retries) retries"),
+             category: Self.categoryWithRetry,
+             userInfo: ["serverID": server.id.uuidString])
     }
 
     func notifyZombieHealed(server: ServerConfig) {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Connection Restored")
-        content.body = String(localized: "\(server.alias) recovered from unresponsive state")
-        content.sound = .default
-        send(id: "zombie-healed-\(server.id)", content: content)
+        send(id: "zombie-healed-\(server.id)",
+             title: String(localized: "Connection Restored"),
+             body: String(localized: "\(server.alias) recovered from unresponsive state"))
     }
 
     func notifyWakeReconnected(count: Int) {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Connections Restored")
-        content.body = String(localized: "Restored \(count) network drive(s) after wake")
-        content.sound = .default
-        send(id: "wake-reconnected", content: content)
+        send(id: "wake-reconnected",
+             title: String(localized: "Connections Restored"),
+             body: String(localized: "Restored \(count) network drive(s) after wake"))
     }
 
     func notifyWakeReconnectFailed(count: Int) {
-        let content = UNMutableNotificationContent()
-        content.title = String(localized: "Reconnect Failed")
-        content.body = String(localized: "\(count) drive(s) not restored after wake")
-        content.sound = .default
-        content.categoryIdentifier = Self.categoryWithRetry
-        send(id: "wake-reconnect-failed", content: content)
+        send(id: "wake-reconnect-failed",
+             title: String(localized: "Reconnect Failed"),
+             body: String(localized: "\(count) drive(s) not restored after wake"),
+             category: Self.categoryWithRetry)
     }
 
-    private func send(id: String, content: UNMutableNotificationContent) {
+    private func send(id: String, title: String, body: String, category: String? = nil, userInfo: [String: String]? = nil) {
         guard let center = center else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        if let category = category { content.categoryIdentifier = category }
+        if let userInfo = userInfo { content.userInfo = userInfo }
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         center.add(request) { error in
             if let error = error {
