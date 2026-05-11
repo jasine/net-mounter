@@ -8,8 +8,6 @@ struct ServerDetailView: View {
     @State private var password: String = ""
     @State private var isTestRunning = false
     @State private var testResult: Bool? = nil
-    @State private var showCopied = false
-    
     var isNew: Bool
     
     init(config: ServerConfig? = nil) {
@@ -77,25 +75,6 @@ struct ServerDetailView: View {
                     ))
                     .toggleStyle(.switch)
                     .disabled(NetworkMonitor.shared.currentFingerprint == nil && config.autoMountRules.isEmpty)
-                }
-
-                if !isNew {
-                    Section {
-                        Button {
-                            if let url = config.shareURL {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                                showCopied = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                    showCopied = false
-                                }
-                            }
-                        } label: {
-                            Label(showCopied ? "Copied!" : "Copy Share Link",
-                                  systemImage: showCopied ? "checkmark" : "link")
-                        }
-                        .disabled(config.hostname.isEmpty)
-                    }
                 }
             }
             .scrollContentBackground(.hidden)

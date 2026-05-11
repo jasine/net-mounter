@@ -111,6 +111,7 @@ struct ServerRow: View {
     @State private var isMounted = false
     @State private var animating = false
     @State private var showDeleteConfirm = false
+    @State private var showCopied = false
     let networkPublisher = NetworkMonitor.shared.$currentFingerprint
     
     var body: some View {
@@ -172,6 +173,25 @@ struct ServerRow: View {
                         .disabled(!isMounted)
                         .help("Open in Finder")
                         
+                        Button {
+                            if let url = server.shareURL {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                                showCopied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    showCopied = false
+                                }
+                            }
+                        } label: {
+                            Image(systemName: showCopied ? "checkmark" : "link")
+                                .font(.system(size: 14))
+                                .padding(8)
+                                .background(.thinMaterial)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy Share Link")
+
                         Button(action: onEdit) {
                             Image(systemName: "pencil")
                                 .font(.system(size: 14))
