@@ -133,6 +133,18 @@ class NetworkMonitor: ObservableObject {
         return nil
     }
 
+    private static let vpnInterfacePrefixes = ["utun", "ipsec", "ppp"]
+
+    func isVPNRouted(host: String) -> Bool {
+        guard let routePath = Self.resolveCommand(["/sbin/route", "/usr/sbin/route"]) else { return false }
+        let output = Self.runCommand(routePath, arguments: ["-n", "get", host])
+        guard let interfaceLine = output.components(separatedBy: "\n")
+            .first(where: { $0.contains("interface:") }),
+              let iface = interfaceLine.components(separatedBy: ":")
+            .last?.trimmingCharacters(in: .whitespaces) else { return false }
+        return Self.vpnInterfacePrefixes.contains(where: { iface.hasPrefix($0) })
+    }
+
     private static func runCommand(_ path: String, arguments: [String]) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)

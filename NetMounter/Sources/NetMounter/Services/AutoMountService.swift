@@ -11,7 +11,10 @@ class AutoMountService: ObservableObject {
 
     // Store pending retry work items so we can cancel them if network changes
     private var retryWorkItems: [UUID: DispatchWorkItem] = [:]
-    
+
+    // Track servers mounted via VPN route so we can unmount on VPN disconnect
+    private var vpnMountedServerIDs: Set<UUID> = []
+
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
     
@@ -46,22 +49,32 @@ class AutoMountService: ObservableObject {
     
     func evaluateAutoMount(for fingerprint: NetworkFingerprint) {
         logger.info("Evaluating auto-mount for fingerprint: \(String(describing: fingerprint), privacy: .public)")
-        
+
         // Cancel all pending retries as the network environment has changed
         cancelAllRetries()
-        
+
         for server in appState.servers {
-            // Check if this server has a matching rule
-            if server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) }) {
-                // If already mounted, skip
-                guard let url = URL(string: server.urlString) else { continue }
+            guard !server.autoMountRules.isEmpty else { continue }
+            guard let url = URL(string: server.urlString) else { continue }
+
+            let matchesFingerprint = server.autoMountRules.contains(where: { $0.enabled && $0.fingerprint.matches(fingerprint) })
+            let isVPN = networkMonitor.isVPNRouted(host: server.hostname)
+
+            if matchesFingerprint || (isVPN && server.autoMountRules.contains(where: { $0.enabled })) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
-                     logger.debug("Server \(server.alias, privacy: .public) already mounted at \(path, privacy: .public). Skipping.")
-                     continue
+                    logger.debug("Server \(server.alias, privacy: .public) already mounted at \(path, privacy: .public). Skipping.")
+                    if isVPN { vpnMountedServerIDs.insert(server.id) }
+                    continue
                 }
-                
-                // Trigger mount
+                if isVPN { vpnMountedServerIDs.insert(server.id) }
                 attemptMount(server)
+            } else if !isVPN && vpnMountedServerIDs.contains(server.id) {
+                // VPN disconnected — unmount servers that were VPN-routed
+                vpnMountedServerIDs.remove(server.id)
+                if let path = MountingManager.shared.findExistingMountPath(for: url) {
+                    logger.info("VPN disconnected, unmounting \(server.alias, privacy: .public)")
+                    MountingManager.shared.unmount(mountPath: path) { _ in }
+                }
             }
         }
     }
