@@ -1,7 +1,7 @@
 import Foundation
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "SidebarManager")
+private let logger = Logger(label: "SidebarManager")
 
 class SidebarManager {
     static let shared = SidebarManager()
@@ -37,7 +37,7 @@ class SidebarManager {
                 logger.error("sfltool failed with exit code: \(process.terminationStatus)")
             }
         } catch {
-            logger.error("Failed to run sfltool: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to run sfltool: \(error.localizedDescription)")
         }
     }
 }

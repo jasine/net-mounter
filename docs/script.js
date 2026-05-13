@@ -29,6 +29,8 @@ const translations = {
         feature11Desc: "Get notified on mount success, failure, and recovery. Retry failed mounts from the notification.",
         feature12Title: "Zombie Mount Healing",
         feature12Desc: "Automatically detects unresponsive mounts and recovers them without manual intervention.",
+        feature13Title: "Pinned Folders",
+        feature13Desc: "Pin frequently used subfolders to any server card for instant one-click access.",
         protocolsTitle: "Supported Protocols",
         protocolSmb: "Windows & NAS file sharing",
         protocolNfs: "Linux & Unix file sharing",
@@ -48,6 +50,7 @@ const translations = {
         comparisonSleepWake: "Sleep/Wake Reconnect",
         comparisonURLScheme: "URL Scheme Sharing",
         comparisonNotifications: "Mount Notifications",
+        comparisonPinnedFolders: "Pinned Folders",
         comparisonLaunchLogin: "Launch at Login",
         footerRights: "All rights reserved."
     },
@@ -81,6 +84,8 @@ const translations = {
         feature11Desc: "挂载成功、失败、恢复时即时推送通知，支持从通知重试。",
         feature12Title: "僵尸挂载自愈",
         feature12Desc: "自动检测无响应的挂载点并恢复，无需手动干预。",
+        feature13Title: "固定文件夹",
+        feature13Desc: "将常用子文件夹固定到服务器卡片，一键快速打开。",
         protocolsTitle: "支持的协议",
         protocolSmb: "Windows 及 NAS 文件共享",
         protocolNfs: "Linux 及 Unix 文件共享",
@@ -100,6 +105,7 @@ const translations = {
         comparisonSleepWake: "睡眠/唤醒重连",
         comparisonURLScheme: "链接分享",
         comparisonNotifications: "挂载通知",
+        comparisonPinnedFolders: "固定文件夹",
         comparisonLaunchLogin: "开机自启",
         footerRights: "保留所有权利。"
     }

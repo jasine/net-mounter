@@ -1,9 +1,9 @@
 import Foundation
 import Network
 import Combine
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "NetworkDiscovery")
+private let logger = Logger(label: "NetworkDiscovery")
 
 // MARK: - Data Models
 
@@ -107,9 +107,9 @@ class NetworkDiscoveryService: ObservableObject {
         browser.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                logger.debug("Browser ready for \(protocolType.displayName, privacy: .public)")
+                logger.debug("Browser ready for \(protocolType.displayName)")
             case .failed(let error):
-                logger.error("Browser failed for \(protocolType.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.error("Browser failed for \(protocolType.displayName): \(error.localizedDescription)")
             case .cancelled:
                 break
             default:
@@ -160,7 +160,7 @@ class NetworkDiscoveryService: ObservableObject {
                         // Deduplicate by host + protocol
                         if !self.servers.contains(where: { $0.host == hostString && $0.protocolType == protocolType }) {
                             self.servers.append(server)
-                            logger.info("Discovered \(protocolType.displayName, privacy: .public) server: \(name, privacy: .public) at \(hostString, privacy: .public)")
+                            logger.info("Discovered \(protocolType.displayName) server: \(name) at \(hostString)")
                         }
                     }
                     // Probe for NFS on the same host (most NAS devices serve both SMB and NFS)
@@ -228,7 +228,7 @@ class NetworkDiscoveryService: ObservableObject {
                     guard let self = self else { return }
                     if !self.servers.contains(where: { $0.host == host && $0.protocolType == .nfs }) {
                         self.servers.append(server)
-                        logger.info("NFS probe: found NFS on \(host, privacy: .public)")
+                        logger.info("NFS probe: found NFS on \(host)")
                     }
                 }
                 connection.cancel()

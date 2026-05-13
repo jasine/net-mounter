@@ -1,8 +1,8 @@
 import Foundation
 import Security
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "KeychainManager")
+private let logger = Logger(label: "KeychainManager")
 
 class KeychainManager {
     static let shared = KeychainManager()

@@ -2,6 +2,7 @@
 
 # Configuration
 APP_NAME="NetMounter"
+VERSION="${1:-1.0.0}"
 BUILD_DIR=".build/release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
 OUTPUT_DIR="."
@@ -49,9 +50,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.2</string>
+    <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>${VERSION##*.}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>

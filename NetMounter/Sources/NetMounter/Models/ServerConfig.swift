@@ -36,6 +36,18 @@ enum NetworkProtocol: String, Codable, CaseIterable {
     }
 }
 
+struct PinnedFolder: Codable, Identifiable {
+    let id: UUID
+    var name: String
+    var subpath: String
+
+    init(id: UUID = UUID(), name: String, subpath: String) {
+        self.id = id
+        self.name = name
+        self.subpath = subpath
+    }
+}
+
 struct AutoMountRule: Codable, Identifiable {
     var id: UUID = UUID()
     var fingerprint: NetworkFingerprint
@@ -54,6 +66,7 @@ struct ServerConfig: Codable, Identifiable {
     
     // Auto-mount rules
     var autoMountRules: [AutoMountRule] = []
+    var pinnedFolders: [PinnedFolder] = []
 
     var normalizedSharePath: String {
         sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))

@@ -11,6 +11,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     var autoMountService: AutoMountService!
     var sleepWakeManager: SleepWakeManager!
     private var statusIconTimer: AnyCancellable?
+    var preventPopoverClose = false
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
@@ -152,10 +153,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     }
 
     // MARK: - NSPopoverDelegate
+    func popoverShouldClose(_ popover: NSPopover) -> Bool {
+        !preventPopoverClose
+    }
+
     func popoverWillShow(_ notification: Notification) {
         appState.isUIVisible = true
     }
-    
+
     func popoverDidClose(_ notification: Notification) {
         appState.isUIVisible = false
     }

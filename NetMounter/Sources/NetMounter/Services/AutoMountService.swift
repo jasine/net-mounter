@@ -1,8 +1,8 @@
 import Foundation
 import Combine
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "AutoMount")
+private let logger = Logger(label: "AutoMount")
 
 class AutoMountService: ObservableObject {
     private var appState: AppState
@@ -14,6 +14,9 @@ class AutoMountService: ObservableObject {
 
     // Track servers mounted via VPN route so we can unmount on VPN disconnect
     private var vpnMountedServerIDs: Set<UUID> = []
+
+    // Dedup: avoid double-evaluation when SleepWakeManager and subscription both fire
+    private var lastEvaluation: (fingerprint: NetworkFingerprint, uptime: TimeInterval)?
 
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
@@ -48,7 +51,14 @@ class AutoMountService: ObservableObject {
     }
     
     func evaluateAutoMount(for fingerprint: NetworkFingerprint) {
-        logger.info("Evaluating auto-mount for fingerprint: \(String(describing: fingerprint), privacy: .public)")
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastEvaluation, last.fingerprint == fingerprint, now - last.uptime < 5.0 {
+            logger.debug("Skipping duplicate evaluation for same fingerprint")
+            return
+        }
+        lastEvaluation = (fingerprint, now)
+
+        logger.info("Evaluating auto-mount for fingerprint: \(String(describing: fingerprint))")
 
         // Cancel all pending retries as the network environment has changed
         cancelAllRetries()
@@ -80,7 +90,7 @@ class AutoMountService: ObservableObject {
 
             if server.shouldAutoMount(for: fingerprint, isVPN: isVPN) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
-                    logger.debug("Server \(server.alias, privacy: .public) already mounted at \(path, privacy: .public). Skipping.")
+                    logger.debug("Server \(server.alias) already mounted at \(path). Skipping.")
                     if isVPN { vpnMountedServerIDs.insert(server.id) }
                     continue
                 }
@@ -89,7 +99,7 @@ class AutoMountService: ObservableObject {
             } else if !isVPN && vpnMountedServerIDs.contains(server.id) {
                 vpnMountedServerIDs.remove(server.id)
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
-                    logger.info("VPN disconnected, unmounting \(server.alias, privacy: .public)")
+                    logger.info("VPN disconnected, unmounting \(server.alias)")
                     MountingManager.shared.unmount(mountPath: path) { _ in }
                 }
             }
@@ -111,16 +121,16 @@ class AutoMountService: ObservableObject {
                 guard let serverURL = URL(string: server.urlString) else { continue }
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
                     if MountingManager.shared.isMountAlive(path) {
-                        logger.debug("Periodic check: \(server.alias, privacy: .public) alive at \(path, privacy: .public).")
+                        logger.debug("Periodic check: \(server.alias) alive at \(path).")
                     } else {
-                        logger.warning("Periodic check: \(server.alias, privacy: .public) is zombie at \(path, privacy: .public). Recovering...")
+                        logger.warning("Periodic check: \(server.alias) is zombie at \(path). Recovering...")
                         MountingManager.shared.forceUnmount(path: path)
                         attemptMount(server, retryCount: 0, onSuccess: {
                             NotificationService.shared.notifyZombieHealed(server: server)
                         })
                     }
                 } else {
-                    logger.warning("Periodic check: \(server.alias, privacy: .public) should be mounted but is NOT. Recovering...")
+                    logger.warning("Periodic check: \(server.alias) should be mounted but is NOT. Recovering...")
                     // Reset retry count for periodic check to give it a fresh chance
                     attemptMount(server, retryCount: 0)
                 }
@@ -135,27 +145,27 @@ class AutoMountService: ObservableObject {
             cancelRetry(for: server)
         }
         
-        logger.info("Auto-mount \(server.alias, privacy: .public) attempt \(retryCount + 1)")
+        logger.info("Auto-mount \(server.alias) attempt \(retryCount + 1)")
         
         // Verify connectivity first
         ConnectionTester.shared.checkReachability(host: server.hostname, port: server.serverProtocol.defaultPort) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(true):
-                    logger.info("\(server.hostname, privacy: .public) reachable. Mounting...")
-                    MountingManager.shared.mount(config: server) { mountResult in
+                    logger.info("\(server.hostname) reachable. Mounting...")
+                    MountingManager.shared.mount(config: server, silent: retryCount > 0) { mountResult in
                         switch mountResult {
                         case .success(let path):
-                            logger.info("Mounted \(server.alias, privacy: .public) at \(path, privacy: .public)")
+                            logger.info("Mounted \(server.alias) at \(path)")
                             NotificationService.shared.notifyMountSucceeded(server: server)
                             onSuccess?()
                         case .failure(let error):
-                            logger.error("Failed to mount \(server.alias, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                            logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
                             self?.scheduleRetry(for: server, currentRetryCount: retryCount)
                         }
                     }
                 case .success(false), .failure:
-                    logger.debug("\(server.hostname, privacy: .public) not reachable. Skipping.")
+                    logger.debug("\(server.hostname) not reachable. Skipping.")
                     self?.scheduleRetry(for: server, currentRetryCount: retryCount)
                 }
             }
@@ -163,15 +173,22 @@ class AutoMountService: ObservableObject {
     }
     
     private func scheduleRetry(for server: ServerConfig, currentRetryCount: Int) {
+        // NFS mounts require root — silent retries (without admin dialog) always fail
+        if server.serverProtocol == .nfs {
+            logger.info("NFS mount requires admin privileges, skipping silent retries for \(server.alias)")
+            NotificationService.shared.notifyMountFailed(server: server)
+            return
+        }
+
         let maxRetries = 5
         guard currentRetryCount < maxRetries else {
-            logger.warning("Max retries reached for \(server.alias, privacy: .public). Giving up.")
+            logger.warning("Max retries reached for \(server.alias). Giving up.")
             NotificationService.shared.notifyMountFailed(server: server)
             return
         }
         
-        let delay: TimeInterval = 5.0
-        logger.debug("Scheduling retry for \(server.alias, privacy: .public) in \(delay)s...")
+        let delay: TimeInterval = 2.0 * pow(2.0, Double(currentRetryCount))
+        logger.debug("Scheduling retry for \(server.alias) in \(delay)s...")
         
         let workItem = DispatchWorkItem { [weak self] in
             self?.attemptMount(server, retryCount: currentRetryCount + 1)

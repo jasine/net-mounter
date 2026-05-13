@@ -31,6 +31,7 @@
 - 🧟 **Zombie Mount Healing** - Detect and recover unresponsive mounts automatically
 - 🔔 **Notifications** - Get notified on mount success, failure, and recovery events
 - 🔗 **URL Scheme Sharing** - Share server configs via `netmounter://` links for easy team setup
+- 📌 **Pinned Folders** - Pin frequently used subfolders for one-click access from the server card
 - 📊 **Dynamic Status Icon** - Menu bar icon reflects real-time mount status at a glance
 - 🔐 **Secure Storage** - Passwords securely stored in macOS Keychain
 - 🎨 **Liquid Glass UI** - Beautiful frosted glass interface design

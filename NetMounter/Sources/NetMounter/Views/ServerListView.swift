@@ -1,7 +1,8 @@
 import SwiftUI
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "ServerListView")
+private let logger = Logger(label: "ServerListView")
+
 struct ServerListView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var autoMountService: AutoMountService
@@ -74,11 +75,14 @@ struct ServerListView: View {
                             ServerRow(server: server, onEdit: {
                                 editingServer = server
                             }, onDelete: {
-                                // Clean up keychain entry before removing
                                 if let keyId = server.keychainItemId {
                                     KeychainManager.shared.delete(account: keyId)
                                 }
                                 appState.removeServer(id: server.id)
+                            }, onUpdatePins: { pins in
+                                var updated = server
+                                updated.pinnedFolders = pins
+                                appState.updateServer(updated)
                             })
                         }
                     }
@@ -107,8 +111,10 @@ struct ServerRow: View {
     let server: ServerConfig
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onUpdatePins: ([PinnedFolder]) -> Void
     @State private var mountStatus: String = "Idle"
     @State private var isMounted = false
+    @State private var currentMountPath: String?
     @State private var animating = false
     @State private var showDeleteConfirm = false
     @State private var showCopied = false
@@ -221,6 +227,46 @@ struct ServerRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(server.urlString)
+
+                if !server.pinnedFolders.isEmpty || isMounted {
+                    Divider()
+                    FlowLayout(spacing: 6) {
+                        ForEach(server.pinnedFolders) { pin in
+                            Button(action: { openPinnedFolder(pin) }) {
+                                Label(pin.name, systemImage: "pin.fill")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.thinMaterial)
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                            .help(pin.subpath)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    var pins = server.pinnedFolders
+                                    pins.removeAll { $0.id == pin.id }
+                                    onUpdatePins(pins)
+                                } label: {
+                                    Label("Remove Pin", systemImage: "pin.slash")
+                                }
+                            }
+                        }
+
+                        if isMounted {
+                            Button(action: addPinnedFolder) {
+                                Image(systemName: "plus")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Pin a subfolder")
+                        }
+                    }
+                }
             }
             .padding(.top, 4) // Align top text with icon visually
         }
@@ -303,11 +349,13 @@ struct ServerRow: View {
             if let path = MountingManager.shared.findExistingMountPath(for: url) {
                 DispatchQueue.main.async {
                     isMounted = true
+                    currentMountPath = path
                     mountStatus = "Mounted at: \(path)"
                 }
             } else {
                 DispatchQueue.main.async {
                     isMounted = false
+                    currentMountPath = nil
                     mountStatus = "Idle"
                 }
             }
@@ -315,11 +363,46 @@ struct ServerRow: View {
     }
 
     private func openFolder() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            if let url = URL(string: server.urlString),
-               let path = MountingManager.shared.findExistingMountPath(for: url) {
-                DispatchQueue.main.async {
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+        guard let path = currentMountPath else { return }
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+    }
+
+    private func addPinnedFolder() {
+        guard let root = currentMountPath,
+              let pin = PinnedFolderPicker.pick(root: root) else { return }
+        var pins = server.pinnedFolders
+        pins.append(pin)
+        onUpdatePins(pins)
+    }
+
+    private func openPinnedFolder(_ pin: PinnedFolder) {
+        let subpath = pin.subpath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        if let path = currentMountPath {
+            let fullPath = (path as NSString).appendingPathComponent(subpath)
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: fullPath)
+        } else {
+            ensureMounted { path in
+                let fullPath = (path as NSString).appendingPathComponent(subpath)
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: fullPath)
+            }
+        }
+    }
+
+    private func ensureMounted(then action: @escaping (String) -> Void) {
+        mountStatus = "Connecting..."
+        MountingManager.shared.mount(config: server) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let path):
+                    isMounted = true
+                    currentMountPath = path
+                    mountStatus = "Mounted at: \(path)"
+                    action(path)
+                case .failure(let error):
+                    isMounted = false
+                    currentMountPath = nil
+                    mountStatus = "Error: \(error.localizedDescription)"
+                    logger.error("Mount error: \(error.localizedDescription)")
                 }
             }
         }
@@ -328,9 +411,9 @@ struct ServerRow: View {
     private func toggleMount() {
         if isMounted {
             mountStatus = "Unmounting..."
-            guard let url = URL(string: server.urlString),
-                  let path = MountingManager.shared.findExistingMountPath(for: url) else {
+            guard let path = currentMountPath else {
                 isMounted = false
+                currentMountPath = nil
                 mountStatus = "Idle"
                 return
             }
@@ -340,26 +423,84 @@ struct ServerRow: View {
                         mountStatus = "Unmount Failed: \(error.localizedDescription)"
                     } else {
                         isMounted = false
+                        currentMountPath = nil
                         mountStatus = "Idle"
                     }
                 }
             }
         } else {
-            mountStatus = "Connecting..."
-            MountingManager.shared.mount(config: server) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let path):
-                        isMounted = true
-                        mountStatus = "Mounted at: \(path)"
-                        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
-                    case .failure(let error):
-                        isMounted = false
-                        mountStatus = "Error: \(error.localizedDescription)"
-                        logger.error("Mount error: \(error.localizedDescription, privacy: .public)")
-                    }
-                }
+            ensureMounted { path in
+                NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
             }
         }
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var height: CGFloat = 0
+        for (i, row) in rows.enumerated() {
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            height += rowHeight + (i > 0 ? spacing : 0)
+        }
+        return CGSize(width: proposal.width ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var y = bounds.minY
+        for (i, row) in rows.enumerated() {
+            if i > 0 { y += spacing }
+            var x = bounds.minX
+            let rowHeight = row.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
+            for subview in row {
+                let size = subview.sizeThatFits(.unspecified)
+                subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += rowHeight
+        }
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[LayoutSubviews.Element]] {
+        guard !subviews.isEmpty else { return [] }
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[LayoutSubviews.Element]] = [[]]
+        var currentWidth: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentWidth + size.width > maxWidth && !rows[rows.count - 1].isEmpty {
+                rows.append([])
+                currentWidth = 0
+            }
+            rows[rows.count - 1].append(subview)
+            currentWidth += size.width + spacing
+        }
+        return rows
+    }
+}
+
+enum PinnedFolderPicker {
+    static func pick(root: String) -> PinnedFolder? {
+        let appDelegate = NSApp.delegate as? AppDelegate
+        appDelegate?.preventPopoverClose = true
+        defer { appDelegate?.preventPopoverClose = false }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: root)
+        panel.message = "Choose a subfolder to pin"
+
+        guard panel.runModal() == .OK, let selected = panel.url else { return nil }
+        let rootPath = root.hasSuffix("/") ? root : root + "/"
+        let subpath = selected.path.hasPrefix(rootPath)
+            ? String(selected.path.dropFirst(rootPath.count))
+            : selected.lastPathComponent
+        return PinnedFolder(name: selected.lastPathComponent, subpath: subpath)
     }
 }

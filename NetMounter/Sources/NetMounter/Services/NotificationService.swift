@@ -1,8 +1,8 @@
 import Foundation
 import UserNotifications
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "Notification")
+private let logger = Logger(label: "Notification")
 
 class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationService()
@@ -41,7 +41,7 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
         notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
-                logger.error("Notification auth error: \(error.localizedDescription, privacy: .public)")
+                logger.error("Notification auth error: \(error.localizedDescription)")
             } else if !granted {
                 logger.info("Notification permission denied by user")
             }
@@ -70,12 +70,6 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
              body: String(localized: "\(server.alias) recovered from unresponsive state"))
     }
 
-    func notifyWakeReconnected(count: Int) {
-        send(id: "wake-reconnected",
-             title: String(localized: "Connections Restored"),
-             body: String(localized: "Restored \(count) network drive(s) after wake"))
-    }
-
     func notifyWakeReconnectFailed(count: Int) {
         send(id: "wake-reconnect-failed",
              title: String(localized: "Reconnect Failed"),
@@ -94,7 +88,7 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         let request = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         center.add(request) { error in
             if let error = error {
-                logger.error("Failed to send notification: \(error.localizedDescription, privacy: .public)")
+                logger.error("Failed to send notification: \(error.localizedDescription)")
             }
         }
     }

@@ -1,8 +1,8 @@
 import Foundation
 import Combine
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "AppState")
+private let logger = Logger(label: "AppState")
 
 enum MountStatus {
     case idle
@@ -56,7 +56,7 @@ class AppState: ObservableObject {
             let data = try JSONEncoder().encode(servers)
             try data.write(to: configURL)
         } catch {
-            logger.error("Failed to save config: \(error.localizedDescription, privacy: .public)")
+            logger.error("Failed to save config: \(error.localizedDescription)")
         }
     }
     
@@ -80,7 +80,7 @@ class AppState: ObservableObject {
             let data = try Data(contentsOf: configURL)
             servers = try JSONDecoder().decode([ServerConfig].self, from: data)
         } catch {
-            logger.info("No existing config or failed to load: \(error.localizedDescription, privacy: .public)")
+            logger.info("No existing config or failed to load: \(error.localizedDescription)")
         }
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 struct ServerDetailView: View {
     @Environment(\.presentationMode) var presentationMode
     @EnvironmentObject var appState: AppState
-    
+
     @State var config: ServerConfig
     @State private var password: String = ""
     @State private var isTestRunning = false
@@ -62,6 +62,36 @@ struct ServerDetailView: View {
                     }
                 }
                 
+                Section(header: Text("Pinned Folders").foregroundColor(.secondary)) {
+                    ForEach(config.pinnedFolders) { pin in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(pin.name).font(.body)
+                                Text(pin.subpath).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Button(action: {
+                                config.pinnedFolders.removeAll { $0.id == pin.id }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Button(action: pickFolder) {
+                        Label("Choose Folder…", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(mountPath == nil)
+
+                    if mountPath == nil {
+                        Text("Mount the server first to browse folders.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Section {
                     Toggle("Auto-Mount", isOn: Binding(
                         get: { !config.autoMountRules.isEmpty },
@@ -104,6 +134,17 @@ struct ServerDetailView: View {
         }
     }
     
+    private var mountPath: String? {
+        guard let url = URL(string: config.urlString) else { return nil }
+        return MountingManager.shared.findExistingMountPath(for: url)
+    }
+
+    private func pickFolder() {
+        guard let root = mountPath,
+              let pin = PinnedFolderPicker.pick(root: root) else { return }
+        config.pinnedFolders.append(pin)
+    }
+
     private func addCurrentNetwork() {
         guard let fingerprint = NetworkMonitor.shared.currentFingerprint else { return }
         let alreadyExists = config.autoMountRules.contains { $0.fingerprint.matches(fingerprint) }

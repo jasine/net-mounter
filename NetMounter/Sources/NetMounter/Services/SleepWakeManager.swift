@@ -3,9 +3,9 @@ import Foundation
 import Combine
 import AppKit
 import NetFS
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "SleepWake")
+private let logger = Logger(label: "SleepWake")
 
 class SleepWakeManager {
     private let appState: AppState
@@ -103,8 +103,6 @@ class SleepWakeManager {
         logger.info("Network ready after wake — restoring mounts")
         cancelWakeWait()
 
-        let snapshotCount = sleepSnapshot.count
-
         // Path 1: Managed servers — delegate to AutoMountService
         autoMountService.evaluateAutoMount(for: fingerprint)
 
@@ -115,9 +113,6 @@ class SleepWakeManager {
         }
 
         sleepSnapshot = []
-        if snapshotCount > 0 {
-            NotificationService.shared.notifyWakeReconnected(count: snapshotCount)
-        }
     }
 
     private func remountManual(snapshot: MountSnapshot) {
@@ -129,9 +124,9 @@ class SleepWakeManager {
                 &mountpoints
             )
             if result == 0 {
-                logger.info("Restored manual mount: \(snapshot.volumePath, privacy: .public)")
+                logger.info("Restored manual mount: \(snapshot.volumePath)")
             } else {
-                logger.debug("Could not restore manual mount \(snapshot.volumePath, privacy: .public) (error \(result))")
+                logger.debug("Could not restore manual mount \(snapshot.volumePath) (error \(result))")
             }
         }
     }
@@ -157,10 +152,10 @@ class SleepWakeManager {
             lock.unlock()
 
             if let error = error {
-                logger.warning("Graceful unmount failed for \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                logger.warning("Graceful unmount failed for \(path): \(error.localizedDescription)")
                 self.forceUnmount(path: path)
             } else {
-                logger.info("Gracefully unmounted \(path, privacy: .public)")
+                logger.info("Gracefully unmounted \(path)")
             }
             completion()
         }
@@ -171,7 +166,7 @@ class SleepWakeManager {
             completed = true
             lock.unlock()
 
-            logger.warning("Unmount timed out for \(path, privacy: .public) — force unmounting")
+            logger.warning("Unmount timed out for \(path) — force unmounting")
             self.forceUnmount(path: path)
             completion()
         }

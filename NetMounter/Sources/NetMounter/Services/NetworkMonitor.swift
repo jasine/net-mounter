@@ -2,9 +2,9 @@ import Foundation
 import Network
 import CoreWLAN
 import Combine
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "NetworkMonitor")
+private let logger = Logger(label: "NetworkMonitor")
 
 class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
@@ -97,7 +97,7 @@ class NetworkMonitor: ObservableObject {
             self.currentPath = path
             if self.currentFingerprint != fingerprint {
                 self.currentFingerprint = fingerprint
-                logger.info("Network changed: \(String(describing: self.currentFingerprint), privacy: .public)")
+                logger.info("Network changed: \(String(describing: self.currentFingerprint))")
             }
         }
     }

@@ -1,8 +1,8 @@
 import Foundation
 import NetFS
-import os
+import Logging
 
-private let logger = Logger(subsystem: "com.netmounter.app", category: "MountingManager")
+private let logger = Logger(label: "MountingManager")
 
 enum MountError: LocalizedError {
     case mountFailed(Int32)
@@ -28,10 +28,10 @@ class MountingManager {
     static let shared = MountingManager()
 
     // Mount a server configuration
-    func mount(config: ServerConfig, completion: @escaping (Result<String, Error>) -> Void) {
+    func mount(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
         // NetFS does not support NFS — use system URL handler instead
         if config.serverProtocol == .nfs {
-            mountNFS(config: config, completion: completion)
+            mountNFS(config: config, silent: silent, completion: completion)
             return
         }
 
@@ -47,15 +47,17 @@ class MountingManager {
             return KeychainManager.shared.retrievePassword(for: keyId) as CFString?
         }()
 
+        let openOptions: CFMutableDictionary? = silent ? Self.noUIOptions() : nil
+
         DispatchQueue.global(qos: .userInitiated).async {
             var mountpoints: Unmanaged<CFArray>? = nil
 
             let result = NetFSMountURLSync(url as CFURL,
-                                           nil,      // Default mount path (/Volumes/ShareName)
-                                           user,     // user passed separately
-                                           password, // password passed separately
-                                           nil,      // open_options
-                                           nil,      // mount_options
+                                           nil,
+                                           user,
+                                           password,
+                                           openOptions,
+                                           nil,
                                            &mountpoints)
 
             if result == 0 {
@@ -70,10 +72,10 @@ class MountingManager {
                     if self.isMountAlive(existingPath) {
                          completion(.success(existingPath))
                     } else {
-                        logger.warning("Found zombie mount at \(existingPath, privacy: .public). Force unmounting...")
+                        logger.warning("Found zombie mount at \(existingPath). Force unmounting...")
                         self.forceUnmount(path: existingPath)
                         logger.info("Retrying mount after cleanup...")
-                        let retryResult = NetFSMountURLSync(url as CFURL, nil, user, password, nil, nil, &mountpoints)
+                        let retryResult = NetFSMountURLSync(url as CFURL, nil, user, password, openOptions, nil, &mountpoints)
                         if retryResult == 0 {
                             if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
                                 completion(.success(firstMount))
@@ -91,6 +93,12 @@ class MountingManager {
                 completion(.failure(MountError.mountFailed(result)))
             }
         }
+    }
+
+    private static func noUIOptions() -> CFMutableDictionary {
+        let dict = NSMutableDictionary()
+        dict["UIOption"] = "NoUI"
+        return dict as CFMutableDictionary
     }
 
     func findExistingMountPath(for url: URL) -> String? {
@@ -169,7 +177,7 @@ class MountingManager {
                     DispatchQueue.main.async { completion(nil) }
                 } else {
                     let stderr = String(data: errorData, encoding: .utf8) ?? ""
-                    logger.error("diskutil unmount failed: \(stderr, privacy: .public)")
+                    logger.error("diskutil unmount failed: \(stderr)")
                     DispatchQueue.main.async { completion(MountError.mountFailed(process.terminationStatus)) }
                 }
             } catch {
@@ -191,7 +199,7 @@ class MountingManager {
     /// Mount NFS via privileged shell command.
     /// macOS requires root for NFS mounts — the system auth dialog supports Touch ID
     /// on macOS Ventura+ with Touch ID hardware.
-    private func mountNFS(config: ServerConfig, completion: @escaping (Result<String, Error>) -> Void) {
+    private func mountNFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
         let cleanShare = config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\ "))
         guard !cleanShare.isEmpty else {
             completion(.failure(MountError.invalidURL))
@@ -221,7 +229,9 @@ class MountingManager {
         // mkdir + mount both need root. Use osascript process so the system-level
         // auth dialog appears above all windows (not blocked by sheets).
         let shellCmd = "mkdir -p '\(mountPoint)' && /sbin/mount -t nfs -o resvport,noowners '\(nfsSource)' '\(mountPoint)'"
-        let script = "do shell script \"\(shellCmd)\" with administrator privileges"
+        let script = silent
+            ? "do shell script \"\(shellCmd)\""
+            : "do shell script \"\(shellCmd)\" with administrator privileges"
 
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
@@ -245,7 +255,7 @@ class MountingManager {
                 completion(.success(mountPoint))
             } else {
                 let stderr = String(data: errorData, encoding: .utf8) ?? ""
-                logger.error("NFS mount failed: \(stderr, privacy: .public)")
+                logger.error("NFS mount failed: \(stderr)")
                 completion(.failure(MountError.mountFailed(process.terminationStatus)))
             }
         }
