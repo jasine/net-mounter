@@ -2,7 +2,7 @@
 
 # Configuration
 APP_NAME="NetMounter"
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.1.0}"
 BUILD_DIR=".build/release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
 OUTPUT_DIR="."
