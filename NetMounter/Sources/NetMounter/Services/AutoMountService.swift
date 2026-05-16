@@ -18,6 +18,10 @@ class AutoMountService: ObservableObject {
     // Dedup: avoid double-evaluation when SleepWakeManager and subscription both fire
     private var lastEvaluation: (fingerprint: NetworkFingerprint, uptime: TimeInterval)?
 
+    // Track WOL polling per hostname to avoid duplicate magic packets
+    private var wolPendingServers: [String: [ServerConfig]] = [:]
+    private var wolPollTimers: [String: DispatchWorkItem] = [:]
+
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
     
@@ -158,6 +162,7 @@ class AutoMountService: ObservableObject {
                         case .success(let path):
                             logger.info("Mounted \(server.alias) at \(path)")
                             NotificationService.shared.notifyMountSucceeded(server: server)
+                            self?.learnMACIfNeeded(for: server)
                             onSuccess?()
                         case .failure(let error):
                             logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
@@ -165,8 +170,12 @@ class AutoMountService: ObservableObject {
                         }
                     }
                 case .success(false), .failure:
-                    logger.debug("\(server.hostname) not reachable. Skipping.")
-                    self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                    logger.debug("\(server.hostname) not reachable.")
+                    if retryCount == 0 && server.wolEnabled && server.wolMACAddress != nil {
+                        self?.attemptWOLAndPoll(server)
+                    } else {
+                        self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                    }
                 }
             }
         }
@@ -210,5 +219,110 @@ class AutoMountService: ObservableObject {
             item.cancel()
         }
         retryWorkItems.removeAll()
+
+        for item in wolPollTimers.values {
+            item.cancel()
+        }
+        wolPollTimers.removeAll()
+        wolPendingServers.removeAll()
+    }
+
+    // MARK: - Wake-on-LAN
+
+    private func learnMACIfNeeded(for server: ServerConfig) {
+        guard server.wolMACAddress == nil else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let mac = WOLService.shared.resolveMAC(for: server.hostname) else { return }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if var updated = self.appState.servers.first(where: { $0.id == server.id }),
+                   updated.wolMACAddress == nil {
+                    updated.wolMACAddress = mac
+                    self.appState.updateServer(updated)
+                    logger.info("Auto-learned MAC \(mac) for \(server.alias)")
+                }
+            }
+        }
+    }
+
+    private func attemptWOLAndPoll(_ server: ServerConfig) {
+        let hostname = server.hostname
+
+        if wolPendingServers[hostname] != nil {
+            wolPendingServers[hostname]?.append(server)
+            logger.debug("WOL poll already active for \(hostname), queued \(server.alias)")
+            return
+        }
+
+        wolPendingServers[hostname] = [server]
+
+        guard let mac = server.wolMACAddress else {
+            logger.warning("WOL enabled but no MAC for \(server.alias), skipping")
+            drainWOLQueue(hostname: hostname, reachable: false)
+            return
+        }
+
+        do {
+            try WOLService.shared.wake(
+                macAddress: mac,
+                broadcastAddress: server.wolBroadcastAddress ?? "255.255.255.255",
+                port: server.wolPort
+            )
+            logger.info("WOL sent for \(server.alias) (\(mac))")
+        } catch {
+            logger.error("WOL failed for \(server.alias): \(error.localizedDescription)")
+            drainWOLQueue(hostname: hostname, reachable: false)
+            return
+        }
+
+        pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
+                         interval: 3.0, remaining: 60.0)
+    }
+
+    private func pollReachability(hostname: String, port: UInt16,
+                                  interval: TimeInterval, remaining: TimeInterval) {
+        guard remaining > 0 else {
+            logger.warning("WOL poll timeout for \(hostname)")
+            if let servers = wolPendingServers[hostname] {
+                for s in servers {
+                    NotificationService.shared.notifyWOLFailed(server: s)
+                }
+            }
+            drainWOLQueue(hostname: hostname, reachable: false)
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            ConnectionTester.shared.checkReachability(host: hostname, port: port) { result in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    switch result {
+                    case .success(true):
+                        logger.info("\(hostname) became reachable after WOL")
+                        self.drainWOLQueue(hostname: hostname, reachable: true)
+                    case .success(false), .failure:
+                        self.pollReachability(hostname: hostname, port: port,
+                                              interval: interval, remaining: remaining - interval)
+                    }
+                }
+            }
+        }
+        wolPollTimers[hostname] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    private func drainWOLQueue(hostname: String, reachable: Bool) {
+        let servers = wolPendingServers.removeValue(forKey: hostname) ?? []
+        wolPollTimers.removeValue(forKey: hostname)
+
+        if reachable {
+            for server in servers {
+                attemptMount(server, retryCount: 0)
+            }
+        } else {
+            for server in servers {
+                scheduleRetry(for: server, currentRetryCount: 0)
+            }
+        }
     }
 }
