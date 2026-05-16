@@ -68,6 +68,12 @@ struct ServerConfig: Codable, Identifiable {
     var autoMountRules: [AutoMountRule] = []
     var pinnedFolders: [PinnedFolder] = []
 
+    // Wake-on-LAN
+    var wolEnabled: Bool = false
+    var wolMACAddress: String?
+    var wolBroadcastAddress: String?
+    var wolPort: UInt16 = 9
+
     var normalizedSharePath: String {
         sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
     }
