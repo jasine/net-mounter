@@ -112,6 +112,7 @@ struct ServerListView: View {
                     scrollContentHeight = height
                 }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .sheet(isPresented: $showingAddSheet) {
             ServerDetailView()
