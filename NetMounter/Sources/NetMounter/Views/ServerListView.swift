@@ -3,6 +3,13 @@ import Logging
 
 private let logger = Logger(label: "ServerListView")
 
+private struct ScrollContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct ServerListView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var autoMountService: AutoMountService
@@ -11,7 +18,10 @@ struct ServerListView: View {
     @State private var showingSettings = false
     @State private var showingDiscovery = false
     @State private var editingServer: ServerConfig?
-    
+    @State private var scrollContentHeight: CGFloat = 0
+    private let maxScrollHeight: CGFloat = 600
+    private let minScrollHeight: CGFloat = 100
+
     var body: some View {
         ZStack {
             // 1. Background Layer (Liquid)
@@ -70,7 +80,7 @@ struct ServerListView: View {
                 
                 // Scrollable List of Glass Cards
                 ScrollView {
-                    LazyVStack(spacing: 16) {
+                    VStack(spacing: 16) {
                         ForEach(appState.servers) { server in
                             ServerRow(server: server, onEdit: {
                                 editingServer = server
@@ -86,7 +96,20 @@ struct ServerListView: View {
                             })
                         }
                     }
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                    .padding(.bottom)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(key: ScrollContentHeightKey.self, value: geo.size.height)
+                        }
+                    )
+                }
+                .frame(height: scrollContentHeight > 0
+                    ? min(max(scrollContentHeight, minScrollHeight), maxScrollHeight)
+                    : nil)
+                .onPreferenceChange(ScrollContentHeightKey.self) { height in
+                    scrollContentHeight = height
                 }
             }
         }

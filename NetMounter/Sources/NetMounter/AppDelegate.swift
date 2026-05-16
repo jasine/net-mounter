@@ -40,7 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
 
         // Setup Popover
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 400)
+        popover.contentSize = NSSize(width: 380, height: 400)
         popover.behavior = .transient
         popover.delegate = self
         
@@ -51,6 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
             .frame(width: 380)
         
         popover.contentViewController = NSHostingController(rootView: rootView)
+        popover.contentViewController?.view.setContentHuggingPriority(.defaultHigh, for: .vertical)
         
         // Setup Status Item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
