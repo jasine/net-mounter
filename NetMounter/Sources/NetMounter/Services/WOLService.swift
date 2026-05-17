@@ -106,7 +106,7 @@ class WOLService {
 
         let output = Self.runCommand(arpPath, arguments: ["-n", hostname])
         guard let line = output.components(separatedBy: "\n")
-            .first(where: { $0.contains(hostname) || $0.contains("(") }) else { return nil }
+            .first(where: { $0.contains("(\(hostname))") }) else { return nil }
 
         let parts = line.components(separatedBy: " ")
         if let atIndex = parts.firstIndex(of: "at"), atIndex + 1 < parts.count {

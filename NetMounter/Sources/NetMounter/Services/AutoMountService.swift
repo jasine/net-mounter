@@ -262,21 +262,25 @@ class AutoMountService: ObservableObject {
             return
         }
 
-        do {
-            try WOLService.shared.wake(
-                macAddress: mac,
-                broadcastAddress: server.wolBroadcastAddress ?? "255.255.255.255",
-                port: server.wolPort
-            )
-            logger.info("WOL sent for \(server.alias) (\(mac))")
-        } catch {
-            logger.error("WOL failed for \(server.alias): \(error.localizedDescription)")
-            drainWOLQueue(hostname: hostname, reachable: false)
-            return
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try WOLService.shared.wake(
+                    macAddress: mac,
+                    broadcastAddress: server.wolBroadcastAddress ?? "255.255.255.255",
+                    port: server.wolPort
+                )
+                logger.info("WOL sent for \(server.alias) (\(mac))")
+                DispatchQueue.main.async {
+                    self?.pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
+                                           interval: 3.0, remaining: 60.0)
+                }
+            } catch {
+                logger.error("WOL failed for \(server.alias): \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self?.drainWOLQueue(hostname: hostname, reachable: false)
+                }
+            }
         }
-
-        pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
-                         interval: 3.0, remaining: 60.0)
     }
 
     private func pollReachability(hostname: String, port: UInt16,
@@ -317,11 +321,11 @@ class AutoMountService: ObservableObject {
 
         if reachable {
             for server in servers {
-                attemptMount(server, retryCount: 0)
+                attemptMount(server, retryCount: 1)
             }
         } else {
             for server in servers {
-                scheduleRetry(for: server, currentRetryCount: 0)
+                scheduleRetry(for: server, currentRetryCount: 1)
             }
         }
     }
