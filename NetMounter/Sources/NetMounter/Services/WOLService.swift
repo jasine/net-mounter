@@ -103,10 +103,15 @@ class WOLService {
     func resolveMAC(for hostname: String) -> String? {
         guard let arpPath = NetworkMonitor.resolveCommand(["/usr/sbin/arp", "/sbin/arp"]) else { return nil }
 
-        let output = NetworkMonitor.runCommand(arpPath, arguments: ["-n", hostname])
-        guard let line = output.components(separatedBy: "\n")
-            .first(where: { $0.contains(" at ") }) else { return nil }
+        // Dump full ARP table — arp -n <host> returns "no entry" on some configurations
+        let output = NetworkMonitor.runCommand(arpPath, arguments: ["-a"])
+        let lines = output.components(separatedBy: "\n")
 
-        return NetworkMonitor.parseMACFromARPLine(line)
+        // Match IP in parentheses: "? (192.168.1.2) at ..." or hostname prefix: "nas.local (192.168.1.2) at ..."
+        let line = lines.first(where: { $0.contains("(\(hostname))") })
+                ?? lines.first(where: { $0.hasPrefix("\(hostname) (") })
+
+        guard let match = line else { return nil }
+        return NetworkMonitor.parseMACFromARPLine(match)
     }
 }

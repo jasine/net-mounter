@@ -113,23 +113,24 @@ struct ServerDetailView: View {
                             .toggleStyle(.switch)
                             .disabled(config.wolMACAddress == nil)
 
-                        if let mac = config.wolMACAddress {
-                            TextField("MAC Address", text: Binding(
-                                get: { mac },
-                                set: { config.wolMACAddress = $0.isEmpty ? nil : $0 }
-                            ))
+                        TextField("MAC Address", text: Binding(
+                            get: { config.wolMACAddress ?? "" },
+                            set: { config.wolMACAddress = $0.isEmpty ? nil : $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
 
-                            DisclosureGroup("Advanced") {
-                                TextField("Broadcast Address", text: Binding(
-                                    get: { config.wolBroadcastAddress ?? "255.255.255.255" },
-                                    set: { config.wolBroadcastAddress = ($0 == "255.255.255.255" || $0.isEmpty) ? nil : $0 }
-                                ))
-                                TextField("Port", value: $config.wolPort, format: .number)
-                            }
-                        } else {
-                            Text("Connect to server once to detect MAC address.")
+                        if config.wolMACAddress == nil {
+                            Text("Enter MAC address or connect to server to auto-detect.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+
+                        DisclosureGroup("Advanced") {
+                            TextField("Broadcast Address", text: Binding(
+                                get: { config.wolBroadcastAddress ?? "255.255.255.255" },
+                                set: { config.wolBroadcastAddress = ($0 == "255.255.255.255" || $0.isEmpty) ? nil : $0 }
+                            ))
+                            TextField("Port", value: $config.wolPort, format: .number)
                         }
                     }
                 }
