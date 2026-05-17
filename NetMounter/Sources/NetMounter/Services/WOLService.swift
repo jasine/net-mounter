@@ -105,7 +105,7 @@ class WOLService {
 
         let output = NetworkMonitor.runCommand(arpPath, arguments: ["-n", hostname])
         guard let line = output.components(separatedBy: "\n")
-            .first(where: { $0.contains("(\(hostname))") }) else { return nil }
+            .first(where: { $0.contains(" at ") }) else { return nil }
 
         return NetworkMonitor.parseMACFromARPLine(line)
     }
