@@ -102,7 +102,7 @@ class NetworkMonitor: ObservableObject {
         }
     }
 
-    private static func resolveCommand(_ candidates: [String]) -> String? {
+    static func resolveCommand(_ candidates: [String]) -> String? {
         candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
@@ -125,12 +125,7 @@ class NetworkMonitor: ObservableObject {
             .first(where: { $0.contains(gatewayIP) }) else { return nil }
 
         // arp output format: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ..."
-        let parts = arpLine.components(separatedBy: " ")
-        if let atIndex = parts.firstIndex(of: "at"), atIndex + 1 < parts.count {
-            let mac = parts[atIndex + 1]
-            if mac.contains(":") { return mac }
-        }
-        return nil
+        return Self.parseMACFromARPLine(arpLine)
     }
 
     private static let vpnInterfacePrefixes = ["utun", "ipsec", "ppp"]
@@ -145,7 +140,15 @@ class NetworkMonitor: ObservableObject {
         return Self.vpnInterfacePrefixes.contains(where: { iface.hasPrefix($0) })
     }
 
-    private static func runCommand(_ path: String, arguments: [String]) -> String {
+    static func parseMACFromARPLine(_ line: String) -> String? {
+        let parts = line.components(separatedBy: " ")
+        guard let atIndex = parts.firstIndex(of: "at"), atIndex + 1 < parts.count else { return nil }
+        let mac = parts[atIndex + 1]
+        guard mac.contains(":"), mac != "(incomplete)" else { return nil }
+        return mac
+    }
+
+    static func runCommand(_ path: String, arguments: [String]) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments

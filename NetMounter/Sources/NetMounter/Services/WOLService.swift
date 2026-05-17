@@ -101,36 +101,12 @@ class WOLService {
     // MARK: - MAC Resolution
 
     func resolveMAC(for hostname: String) -> String? {
-        guard let arpPath = ["/usr/sbin/arp", "/sbin/arp"]
-            .first(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
+        guard let arpPath = NetworkMonitor.resolveCommand(["/usr/sbin/arp", "/sbin/arp"]) else { return nil }
 
-        let output = Self.runCommand(arpPath, arguments: ["-n", hostname])
+        let output = NetworkMonitor.runCommand(arpPath, arguments: ["-n", hostname])
         guard let line = output.components(separatedBy: "\n")
             .first(where: { $0.contains("(\(hostname))") }) else { return nil }
 
-        let parts = line.components(separatedBy: " ")
-        if let atIndex = parts.firstIndex(of: "at"), atIndex + 1 < parts.count {
-            let mac = parts[atIndex + 1]
-            if mac.contains(":") && mac != "(incomplete)" {
-                return mac
-            }
-        }
-        return nil
-    }
-
-    private static func runCommand(_ path: String, arguments: [String]) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        } catch {
-            return ""
-        }
+        return NetworkMonitor.parseMACFromARPLine(line)
     }
 }

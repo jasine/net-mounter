@@ -113,15 +113,9 @@ struct ServerDetailView: View {
                             .toggleStyle(.switch)
                             .disabled(config.wolMACAddress == nil)
 
-                        if config.wolMACAddress == nil {
-                            Text("Connect to server once to detect MAC address.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
-                        if config.wolMACAddress != nil {
+                        if let mac = config.wolMACAddress {
                             TextField("MAC Address", text: Binding(
-                                get: { config.wolMACAddress ?? "" },
+                                get: { mac },
                                 set: { config.wolMACAddress = $0.isEmpty ? nil : $0 }
                             ))
 
@@ -132,6 +126,10 @@ struct ServerDetailView: View {
                                 ))
                                 TextField("Port", value: $config.wolPort, format: .number)
                             }
+                        } else {
+                            Text("Connect to server once to detect MAC address.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }

@@ -22,6 +22,9 @@ class AutoMountService: ObservableObject {
     private var wolPendingServers: [String: [ServerConfig]] = [:]
     private var wolPollTimers: [String: DispatchWorkItem] = [:]
 
+    // Hostnames where MAC resolution already failed — avoid repeated arp spawns
+    private var macResolutionFailed: Set<String> = []
+
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
     
@@ -225,14 +228,19 @@ class AutoMountService: ObservableObject {
         }
         wolPollTimers.removeAll()
         wolPendingServers.removeAll()
+        macResolutionFailed.removeAll()
     }
 
     // MARK: - Wake-on-LAN
 
     private func learnMACIfNeeded(for server: ServerConfig) {
-        guard server.wolMACAddress == nil else { return }
+        guard server.wolMACAddress == nil,
+              !macResolutionFailed.contains(server.hostname) else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let mac = WOLService.shared.resolveMAC(for: server.hostname) else { return }
+            guard let mac = WOLService.shared.resolveMAC(for: server.hostname) else {
+                DispatchQueue.main.async { self?.macResolutionFailed.insert(server.hostname) }
+                return
+            }
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if var updated = self.appState.servers.first(where: { $0.id == server.id }),
