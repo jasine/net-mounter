@@ -7,6 +7,7 @@ private let logger = Logger(label: "MountingManager")
 enum MountError: LocalizedError {
     case mountFailed(Int32)
     case invalidURL
+    case authenticationRequired
     case authenticationFailed
 
     var errorDescription: String? {
@@ -18,8 +19,21 @@ enum MountError: LocalizedError {
             return "Mount failed with error code: \(code)"
         case .invalidURL:
             return "Invalid URL constructed."
+        case .authenticationRequired:
+            return "Authentication required. Please add credentials."
         case .authenticationFailed:
             return "Authentication failed."
+        }
+    }
+
+    var isAuthError: Bool {
+        switch self {
+        case .authenticationRequired, .authenticationFailed:
+            return true
+        case .mountFailed(let code):
+            return code == 80 || code == 1 || code == 13
+        default:
+            return false
         }
     }
 }
@@ -27,78 +41,43 @@ enum MountError: LocalizedError {
 class MountingManager {
     static let shared = MountingManager()
 
-    // Mount a server configuration
+    private func shellEscape(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func appleScriptEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private let inflightLock = NSLock()
+    private var inflightMounts: Set<UUID> = []
+
+    func isMountInFlight(_ serverID: UUID) -> Bool {
+        inflightLock.lock()
+        defer { inflightLock.unlock() }
+        return inflightMounts.contains(serverID)
+    }
+
+    private func markInflight(_ serverID: UUID) -> Bool {
+        inflightLock.lock()
+        defer { inflightLock.unlock() }
+        return inflightMounts.insert(serverID).inserted
+    }
+
+    private func clearInflight(_ serverID: UUID) {
+        inflightLock.lock()
+        defer { inflightLock.unlock() }
+        inflightMounts.remove(serverID)
+    }
+
     func mount(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
-        // NetFS does not support NFS — use system URL handler instead
         if config.serverProtocol == .nfs {
             mountNFS(config: config, silent: silent, completion: completion)
             return
         }
 
-        guard let url = URL(string: config.urlString) else {
-            completion(.failure(MountError.invalidURL))
-            return
-        }
-
-        // Retrieve credentials separately — never embed in URL
-        let user: CFString? = config.username as CFString?
-        let password: CFString? = {
-            guard let keyId = config.keychainItemId else { return nil }
-            return KeychainManager.shared.retrievePassword(for: keyId) as CFString?
-        }()
-
-        let openOptions: CFMutableDictionary? = silent ? Self.noUIOptions() : nil
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            var mountpoints: Unmanaged<CFArray>? = nil
-
-            let result = NetFSMountURLSync(url as CFURL,
-                                           nil,
-                                           user,
-                                           password,
-                                           openOptions,
-                                           nil,
-                                           &mountpoints)
-
-            if result == 0 {
-                if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
-                    completion(.success(firstMount))
-                } else {
-                    completion(.success("Mounted (Unknown Path)"))
-                }
-            } else if result == 17 || result == EEXIST {
-                // EEXIST: Mount point exists or already mounted.
-                if let existingPath = self.findExistingMountPath(for: url) {
-                    if self.isMountAlive(existingPath) {
-                         completion(.success(existingPath))
-                    } else {
-                        logger.warning("Found zombie mount at \(existingPath). Force unmounting...")
-                        self.forceUnmount(path: existingPath)
-                        logger.info("Retrying mount after cleanup...")
-                        let retryResult = NetFSMountURLSync(url as CFURL, nil, user, password, openOptions, nil, &mountpoints)
-                        if retryResult == 0 {
-                            if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
-                                completion(.success(firstMount))
-                            } else {
-                                completion(.success("Mounted (Unknown Path)"))
-                            }
-                        } else {
-                             completion(.failure(MountError.mountFailed(retryResult)))
-                        }
-                    }
-                } else {
-                    completion(.failure(MountError.mountFailed(result)))
-                }
-            } else {
-                completion(.failure(MountError.mountFailed(result)))
-            }
-        }
-    }
-
-    private static func noUIOptions() -> CFMutableDictionary {
-        let dict = NSMutableDictionary()
-        dict["UIOption"] = "NoUI"
-        return dict as CFMutableDictionary
+        mountNetFS(config: config, silent: silent, completion: completion)
     }
 
     func findExistingMountPath(for url: URL) -> String? {
@@ -111,7 +90,6 @@ class MountingManager {
         for mountURL in mountedURLs ?? [] {
             guard mountURL.lastPathComponent == targetShare else { continue }
 
-            // Verify hostname via volumeURLForRemounting if available
             if let values = try? mountURL.resourceValues(forKeys: Set(keys)),
                let remountURL = values.volumeURLForRemounting {
                 let remountHost = remountURL.host?.lowercased()
@@ -135,26 +113,15 @@ class MountingManager {
 
         for mountURL in mountedURLs {
             guard let values = try? mountURL.resourceValues(forKeys: Set(keys)) else { continue }
-
-            // Skip local volumes
             if values.volumeIsLocal == true { continue }
-
             guard let remountURL = values.volumeURLForRemounting else { continue }
 
-            let snapshot = MountSnapshot(
-                serverID: nil,
-                volumePath: mountURL.path,
-                remountURL: remountURL
-            )
-
-            // Try to match against known server configs
-            let matchedServer = servers.first { snapshot.matches($0) }
-            let finalSnapshot = MountSnapshot(
+            let matchedServer = servers.first { MountSnapshot(serverID: nil, volumePath: mountURL.path, remountURL: remountURL).matches($0) }
+            snapshots.append(MountSnapshot(
                 serverID: matchedServer?.id,
                 volumePath: mountURL.path,
                 remountURL: remountURL
-            )
-            snapshots.append(finalSnapshot)
+            ))
         }
 
         return snapshots
@@ -194,11 +161,73 @@ class MountingManager {
         process.waitUntilExit()
     }
 
+    // MARK: - AFP/WebDAV Mount via NetFS
+
+    private func mountNetFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+        guard markInflight(config.id) else {
+            logger.debug("Mount already in-flight for \(config.alias), skipping")
+            DispatchQueue.main.async { completion(.failure(MountError.mountFailed(EBUSY))) }
+            return
+        }
+
+        let wrappedCompletion: (Result<String, Error>) -> Void = { [weak self] result in
+            self?.clearInflight(config.id)
+            DispatchQueue.main.async { completion(result) }
+        }
+
+        guard let url = URL(string: config.urlString) else {
+            wrappedCompletion(.failure(MountError.invalidURL))
+            return
+        }
+
+        if let existingPath = findExistingMountPath(for: url) {
+            if isMountAlive(existingPath) {
+                wrappedCompletion(.success(existingPath))
+                return
+            } else {
+                forceUnmount(path: existingPath)
+            }
+        }
+
+        let user: CFString? = config.username as CFString?
+        let password: CFString? = {
+            guard let keyId = config.keychainItemId else { return nil }
+            return KeychainManager.shared.retrievePassword(for: keyId) as CFString?
+        }()
+
+        let openOptions: CFMutableDictionary? = silent ? Self.noUIOptions() : nil
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var mountpoints: Unmanaged<CFArray>? = nil
+
+            let result = NetFSMountURLSync(url as CFURL, nil, user, password, openOptions, nil, &mountpoints)
+
+            if result == 0 {
+                if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
+                    wrappedCompletion(.success(firstMount))
+                } else {
+                    wrappedCompletion(.success("Mounted (Unknown Path)"))
+                }
+            } else if result == 17 || result == EEXIST {
+                if let existingPath = self.findExistingMountPath(for: url), self.isMountAlive(existingPath) {
+                    wrappedCompletion(.success(existingPath))
+                } else {
+                    wrappedCompletion(.failure(MountError.mountFailed(result)))
+                }
+            } else {
+                wrappedCompletion(.failure(MountError.mountFailed(result)))
+            }
+        }
+    }
+
+    private static func noUIOptions() -> CFMutableDictionary {
+        let dict = NSMutableDictionary()
+        dict["UIOption"] = "NoUI"
+        return dict as CFMutableDictionary
+    }
+
     // MARK: - NFS Mount
 
-    /// Mount NFS via privileged shell command.
-    /// macOS requires root for NFS mounts — the system auth dialog supports Touch ID
-    /// on macOS Ventura+ with Touch ID hardware.
     private func mountNFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
         let cleanShare = config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\ "))
         guard !cleanShare.isEmpty else {
@@ -211,10 +240,20 @@ class MountingManager {
             return
         }
 
-        // Check if already mounted
+        guard markInflight(config.id) else {
+            logger.debug("Mount already in-flight for \(config.alias), skipping")
+            DispatchQueue.main.async { completion(.failure(MountError.mountFailed(EBUSY))) }
+            return
+        }
+
+        let wrappedCompletion: (Result<String, Error>) -> Void = { [weak self] result in
+            self?.clearInflight(config.id)
+            DispatchQueue.main.async { completion(result) }
+        }
+
         if let existingPath = findExistingMountPath(for: url) {
             if isMountAlive(existingPath) {
-                completion(.success(existingPath))
+                wrappedCompletion(.success(existingPath))
                 return
             } else {
                 forceUnmount(path: existingPath)
@@ -226,12 +265,11 @@ class MountingManager {
         let mountPoint = "/Volumes/\(mountName)"
         let nfsSource = "\(config.hostname):\(sharePath)"
 
-        // mkdir + mount both need root. Use osascript process so the system-level
-        // auth dialog appears above all windows (not blocked by sheets).
-        let shellCmd = "mkdir -p '\(mountPoint)' && /sbin/mount -t nfs -o resvport,noowners '\(nfsSource)' '\(mountPoint)'"
+        let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
+        let escapedShellCmd = appleScriptEscape(shellCmd)
         let script = silent
-            ? "do shell script \"\(shellCmd)\""
-            : "do shell script \"\(shellCmd)\" with administrator privileges"
+            ? "do shell script \"\(escapedShellCmd)\""
+            : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
 
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
@@ -244,7 +282,7 @@ class MountingManager {
             do {
                 try process.run()
             } catch {
-                completion(.failure(error))
+                wrappedCompletion(.failure(error))
                 return
             }
 
@@ -252,11 +290,11 @@ class MountingManager {
             process.waitUntilExit()
 
             if process.terminationStatus == 0 {
-                completion(.success(mountPoint))
+                wrappedCompletion(.success(mountPoint))
             } else {
                 let stderr = String(data: errorData, encoding: .utf8) ?? ""
                 logger.error("NFS mount failed: \(stderr)")
-                completion(.failure(MountError.mountFailed(process.terminationStatus)))
+                wrappedCompletion(.failure(MountError.mountFailed(process.terminationStatus)))
             }
         }
     }

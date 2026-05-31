@@ -125,7 +125,7 @@ struct SettingsView: View {
                                         Text("NetMounter")
                                             .font(.system(.title3, design: .rounded))
                                             .fontWeight(.semibold)
-                                        Text("Version 1.0.2")
+                                        Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")")
                                             .font(.subheadline)
                                             .foregroundColor(.secondary)
                                     }

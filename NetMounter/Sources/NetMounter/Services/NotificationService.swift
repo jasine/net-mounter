@@ -70,6 +70,12 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
              body: String(localized: "\(server.alias) recovered from unresponsive state"))
     }
 
+    func notifyWOLFailed(server: ServerConfig) {
+        send(id: "wol-failed-\(server.id)",
+             title: String(localized: "Wake Failed"),
+             body: String(localized: "Could not wake \(server.alias). Check if WOL is enabled on the device."))
+    }
+
     func notifyWakeReconnectFailed(count: Int) {
         send(id: "wake-reconnect-failed",
              title: String(localized: "Reconnect Failed"),

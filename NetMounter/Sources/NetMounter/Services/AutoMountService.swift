@@ -18,6 +18,13 @@ class AutoMountService: ObservableObject {
     // Dedup: avoid double-evaluation when SleepWakeManager and subscription both fire
     private var lastEvaluation: (fingerprint: NetworkFingerprint, uptime: TimeInterval)?
 
+    // Track WOL polling per hostname to avoid duplicate magic packets
+    private var wolPendingServers: [String: [ServerConfig]] = [:]
+    private var wolPollTimers: [String: DispatchWorkItem] = [:]
+
+    // Hostnames where MAC resolution already failed — avoid repeated arp spawns
+    private var macResolutionFailed: Set<String> = []
+
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
     
@@ -107,32 +114,45 @@ class AutoMountService: ObservableObject {
     }
     
     private func performPeriodicHealthCheck() {
-        guard let currentFingerprint = networkMonitor.currentFingerprint else { 
+        guard let currentFingerprint = networkMonitor.currentFingerprint else {
             logger.debug("No current network fingerprint available for periodic check.")
-            return 
+            return
         }
-        
+
         logger.info("Starting periodic health check for servers...")
-        
-        for server in appState.servers {
-            // Check if this server has a matching rule for current network
-            if server.shouldAutoMount(for: currentFingerprint, isVPN: networkMonitor.isVPNRouted(host: server.hostname)) {
-                
+
+        let serversToCheck = appState.servers.filter {
+            $0.shouldAutoMount(for: currentFingerprint, isVPN: networkMonitor.isVPNRouted(host: $0.hostname))
+        }
+        guard !serversToCheck.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for server in serversToCheck {
+                guard let self = self else { return }
                 guard let serverURL = URL(string: server.urlString) else { continue }
+
+                if MountingManager.shared.isMountInFlight(server.id) {
+                    logger.debug("Periodic check: \(server.alias) mount already in-flight. Skipping.")
+                    continue
+                }
+
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
                     if MountingManager.shared.isMountAlive(path) {
                         logger.debug("Periodic check: \(server.alias) alive at \(path).")
                     } else {
                         logger.warning("Periodic check: \(server.alias) is zombie at \(path). Recovering...")
                         MountingManager.shared.forceUnmount(path: path)
-                        attemptMount(server, retryCount: 0, onSuccess: {
-                            NotificationService.shared.notifyZombieHealed(server: server)
-                        })
+                        DispatchQueue.main.async {
+                            self.attemptMount(server, retryCount: 0, onSuccess: {
+                                NotificationService.shared.notifyZombieHealed(server: server)
+                            })
+                        }
                     }
                 } else {
                     logger.warning("Periodic check: \(server.alias) should be mounted but is NOT. Recovering...")
-                    // Reset retry count for periodic check to give it a fresh chance
-                    attemptMount(server, retryCount: 0)
+                    DispatchQueue.main.async {
+                        self.attemptMount(server, retryCount: 0)
+                    }
                 }
             }
         }
@@ -158,15 +178,25 @@ class AutoMountService: ObservableObject {
                         case .success(let path):
                             logger.info("Mounted \(server.alias) at \(path)")
                             NotificationService.shared.notifyMountSucceeded(server: server)
+                            self?.learnMACIfNeeded(for: server)
                             onSuccess?()
                         case .failure(let error):
-                            logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
-                            self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                            if let mountError = error as? MountError, mountError.isAuthError {
+                                logger.warning("Auth required for \(server.alias), skipping retries. Add credentials in settings.")
+                                NotificationService.shared.notifyMountFailed(server: server)
+                            } else {
+                                logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
+                                self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                            }
                         }
                     }
                 case .success(false), .failure:
-                    logger.debug("\(server.hostname) not reachable. Skipping.")
-                    self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                    logger.debug("\(server.hostname) not reachable.")
+                    if retryCount == 0 && server.wolEnabled && server.wolMACAddress != nil {
+                        self?.attemptWOLAndPoll(server)
+                    } else {
+                        self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                    }
                 }
             }
         }
@@ -210,5 +240,119 @@ class AutoMountService: ObservableObject {
             item.cancel()
         }
         retryWorkItems.removeAll()
+
+        for item in wolPollTimers.values {
+            item.cancel()
+        }
+        wolPollTimers.removeAll()
+        wolPendingServers.removeAll()
+        macResolutionFailed.removeAll()
+    }
+
+    // MARK: - Wake-on-LAN
+
+    private func learnMACIfNeeded(for server: ServerConfig) {
+        guard server.wolMACAddress == nil,
+              !macResolutionFailed.contains(server.hostname) else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let mac = WOLService.shared.resolveMAC(for: server.hostname) else {
+                DispatchQueue.main.async { self?.macResolutionFailed.insert(server.hostname) }
+                return
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if var updated = self.appState.servers.first(where: { $0.id == server.id }),
+                   updated.wolMACAddress == nil {
+                    updated.wolMACAddress = mac
+                    self.appState.updateServer(updated)
+                    logger.info("Auto-learned MAC \(mac) for \(server.alias)")
+                }
+            }
+        }
+    }
+
+    private func attemptWOLAndPoll(_ server: ServerConfig) {
+        let hostname = server.hostname
+
+        if wolPendingServers[hostname] != nil {
+            wolPendingServers[hostname]?.append(server)
+            logger.debug("WOL poll already active for \(hostname), queued \(server.alias)")
+            return
+        }
+
+        wolPendingServers[hostname] = [server]
+
+        guard let mac = server.wolMACAddress else {
+            logger.warning("WOL enabled but no MAC for \(server.alias), skipping")
+            drainWOLQueue(hostname: hostname, reachable: false)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try WOLService.shared.wake(
+                    macAddress: mac,
+                    broadcastAddress: server.wolBroadcastAddress ?? "255.255.255.255",
+                    port: server.wolPort
+                )
+                logger.info("WOL sent for \(server.alias) (\(mac))")
+                DispatchQueue.main.async {
+                    self?.pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
+                                           interval: 3.0, remaining: 60.0)
+                }
+            } catch {
+                logger.error("WOL failed for \(server.alias): \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self?.drainWOLQueue(hostname: hostname, reachable: false)
+                }
+            }
+        }
+    }
+
+    private func pollReachability(hostname: String, port: UInt16,
+                                  interval: TimeInterval, remaining: TimeInterval) {
+        guard remaining > 0 else {
+            logger.warning("WOL poll timeout for \(hostname)")
+            if let servers = wolPendingServers[hostname] {
+                for s in servers {
+                    NotificationService.shared.notifyWOLFailed(server: s)
+                }
+            }
+            drainWOLQueue(hostname: hostname, reachable: false)
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            ConnectionTester.shared.checkReachability(host: hostname, port: port) { result in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    switch result {
+                    case .success(true):
+                        logger.info("\(hostname) became reachable after WOL")
+                        self.drainWOLQueue(hostname: hostname, reachable: true)
+                    case .success(false), .failure:
+                        self.pollReachability(hostname: hostname, port: port,
+                                              interval: interval, remaining: remaining - interval)
+                    }
+                }
+            }
+        }
+        wolPollTimers[hostname] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: work)
+    }
+
+    private func drainWOLQueue(hostname: String, reachable: Bool) {
+        let servers = wolPendingServers.removeValue(forKey: hostname) ?? []
+        wolPollTimers.removeValue(forKey: hostname)
+
+        if reachable {
+            for server in servers {
+                attemptMount(server, retryCount: 1)
+            }
+        } else {
+            for server in servers {
+                scheduleRetry(for: server, currentRetryCount: 1)
+            }
+        }
     }
 }

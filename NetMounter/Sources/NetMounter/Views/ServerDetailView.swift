@@ -106,6 +106,34 @@ struct ServerDetailView: View {
                     .toggleStyle(.switch)
                     .disabled(NetworkMonitor.shared.currentFingerprint == nil && config.autoMountRules.isEmpty)
                 }
+
+                if !isNew {
+                    Section(header: Text("Wake-on-LAN").foregroundColor(.secondary)) {
+                        Toggle("Wake before mount", isOn: $config.wolEnabled)
+                            .toggleStyle(.switch)
+                            .disabled(config.wolMACAddress == nil)
+
+                        TextField("MAC Address", text: Binding(
+                            get: { config.wolMACAddress ?? "" },
+                            set: { config.wolMACAddress = $0.isEmpty ? nil : $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+
+                        if config.wolMACAddress == nil {
+                            Text("Enter MAC address or connect to server to auto-detect.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        DisclosureGroup("Advanced") {
+                            TextField("Broadcast Address", text: Binding(
+                                get: { config.wolBroadcastAddress ?? "255.255.255.255" },
+                                set: { config.wolBroadcastAddress = ($0 == "255.255.255.255" || $0.isEmpty) ? nil : $0 }
+                            ))
+                            TextField("Port", value: $config.wolPort, format: .number)
+                        }
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .padding()
@@ -161,6 +189,15 @@ struct ServerDetailView: View {
                 switch result {
                 case .success(true):
                     testResult = true
+                    if config.wolMACAddress == nil {
+                        DispatchQueue.global(qos: .utility).async {
+                            if let mac = WOLService.shared.resolveMAC(for: self.config.hostname) {
+                                DispatchQueue.main.async {
+                                    self.config.wolMACAddress = mac
+                                }
+                            }
+                        }
+                    }
                 case .success(false), .failure:
                     testResult = false
                 }

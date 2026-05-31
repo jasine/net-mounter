@@ -125,14 +125,14 @@ struct DiscoveryView: View {
             sharePath: sharePath,
             autoMountRules: rules
         )
+
         appState.addServer(config)
 
-        // Auto-mount immediately (NFS excluded — requires auth dialog that
-        // conflicts with the discovery sheet)
         if server.protocolType != .nfs {
             MountingManager.shared.mount(config: config) { _ in }
         }
     }
+
 }
 
 // MARK: - Server Discovery Card
