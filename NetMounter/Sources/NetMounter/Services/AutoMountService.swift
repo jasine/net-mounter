@@ -114,32 +114,45 @@ class AutoMountService: ObservableObject {
     }
     
     private func performPeriodicHealthCheck() {
-        guard let currentFingerprint = networkMonitor.currentFingerprint else { 
+        guard let currentFingerprint = networkMonitor.currentFingerprint else {
             logger.debug("No current network fingerprint available for periodic check.")
-            return 
+            return
         }
-        
+
         logger.info("Starting periodic health check for servers...")
-        
-        for server in appState.servers {
-            // Check if this server has a matching rule for current network
-            if server.shouldAutoMount(for: currentFingerprint, isVPN: networkMonitor.isVPNRouted(host: server.hostname)) {
-                
+
+        let serversToCheck = appState.servers.filter {
+            $0.shouldAutoMount(for: currentFingerprint, isVPN: networkMonitor.isVPNRouted(host: $0.hostname))
+        }
+        guard !serversToCheck.isEmpty else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            for server in serversToCheck {
+                guard let self = self else { return }
                 guard let serverURL = URL(string: server.urlString) else { continue }
+
+                if MountingManager.shared.isMountInFlight(server.id) {
+                    logger.debug("Periodic check: \(server.alias) mount already in-flight. Skipping.")
+                    continue
+                }
+
                 if let path = MountingManager.shared.findExistingMountPath(for: serverURL) {
                     if MountingManager.shared.isMountAlive(path) {
                         logger.debug("Periodic check: \(server.alias) alive at \(path).")
                     } else {
                         logger.warning("Periodic check: \(server.alias) is zombie at \(path). Recovering...")
                         MountingManager.shared.forceUnmount(path: path)
-                        attemptMount(server, retryCount: 0, onSuccess: {
-                            NotificationService.shared.notifyZombieHealed(server: server)
-                        })
+                        DispatchQueue.main.async {
+                            self.attemptMount(server, retryCount: 0, onSuccess: {
+                                NotificationService.shared.notifyZombieHealed(server: server)
+                            })
+                        }
                     }
                 } else {
                     logger.warning("Periodic check: \(server.alias) should be mounted but is NOT. Recovering...")
-                    // Reset retry count for periodic check to give it a fresh chance
-                    attemptMount(server, retryCount: 0)
+                    DispatchQueue.main.async {
+                        self.attemptMount(server, retryCount: 0)
+                    }
                 }
             }
         }
@@ -168,8 +181,13 @@ class AutoMountService: ObservableObject {
                             self?.learnMACIfNeeded(for: server)
                             onSuccess?()
                         case .failure(let error):
-                            logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
-                            self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                            if let mountError = error as? MountError, mountError.isAuthError {
+                                logger.warning("Auth required for \(server.alias), skipping retries. Add credentials in settings.")
+                                NotificationService.shared.notifyMountFailed(server: server)
+                            } else {
+                                logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
+                                self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                            }
                         }
                     }
                 case .success(false), .failure:

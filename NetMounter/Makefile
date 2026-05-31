@@ -11,7 +11,7 @@ run:
 
 # Build the application (Release mode)
 build:
-	swift build -c release
+	swift build -c release --arch arm64 --arch x86_64
 
 # Package the application into an .app bundle
 # Usage: make package [VERSION=x.y.z]

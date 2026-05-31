@@ -3,7 +3,7 @@
 # Configuration
 APP_NAME="NetMounter"
 VERSION="${1:-1.1.0}"
-BUILD_DIR=".build/release"
+BUILD_DIR=".build/apple/Products/Release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
 OUTPUT_DIR="."
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
@@ -11,7 +11,7 @@ APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
 # Ensure release build exists
 if [ ! -f "$BINARY_PATH" ]; then
     echo "Release binary not found. Building..."
-    swift build -c release
+    swift build -c release --arch arm64 --arch x86_64
 fi
 
 # Create App Bundle Structure
