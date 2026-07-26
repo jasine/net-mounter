@@ -251,6 +251,12 @@ struct ServerDetailView: View {
         } else {
             appState.updateServer(config)
         }
+        // First NFS server: install the passwordless-mount rule (one auth prompt).
+        // Fire-and-forget — cancellation or failure does not block saving; NFS
+        // mounts then fall back to prompting per-mount.
+        if config.serverProtocol == .nfs && !PrivilegedMountInstaller.isInstalled() {
+            PrivilegedMountInstaller.install { _ in }
+        }
         presentationMode.wrappedValue.dismiss()
     }
 }
