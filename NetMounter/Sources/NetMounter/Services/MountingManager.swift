@@ -265,36 +265,42 @@ class MountingManager {
         let mountPoint = "/Volumes/\(mountName)"
         let nfsSource = "\(config.hostname):\(sharePath)"
 
-        let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
-        let escapedShellCmd = appleScriptEscape(shellCmd)
-        let script = silent
-            ? "do shell script \"\(escapedShellCmd)\""
-            : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
+        let mountProcess = Process()
+        let errorPipe = Pipe()
+
+        if PrivilegedMountInstaller.isInstalled() {
+            // Passwordless path: root-owned wrapper via `sudo -n` (non-interactive).
+            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            mountProcess.arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
+        } else {
+            // Fallback: prompt for admin password via osascript (pre-install behavior).
+            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
+            let escapedShellCmd = appleScriptEscape(shellCmd)
+            let script = silent
+                ? "do shell script \"\(escapedShellCmd)\""
+                : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
+            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            mountProcess.arguments = ["-e", script]
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-
-            let errorPipe = Pipe()
-            process.standardError = errorPipe
-
+            mountProcess.standardError = errorPipe
             do {
-                try process.run()
+                try mountProcess.run()
             } catch {
                 wrappedCompletion(.failure(error))
                 return
             }
 
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            mountProcess.waitUntilExit()
 
-            if process.terminationStatus == 0 {
+            if mountProcess.terminationStatus == 0 {
                 wrappedCompletion(.success(mountPoint))
             } else {
                 let stderr = String(data: errorData, encoding: .utf8) ?? ""
                 logger.error("NFS mount failed: \(stderr)")
-                wrappedCompletion(.failure(MountError.mountFailed(process.terminationStatus)))
+                wrappedCompletion(.failure(MountError.mountFailed(mountProcess.terminationStatus)))
             }
         }
     }
