@@ -5,6 +5,16 @@ final class MountingManagerTests: XCTestCase {
 
     // MARK: - B: SMB share path validation
 
+    func testMountURLString_excludesCredentials_evenWhenUsernameSet() {
+        var config = ServerConfig(alias: "nas", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        config.username = "jasine"
+        // Display URL includes the username; mount URL must NOT (embedding it
+        // AND passing it as a NetFS arg makes the mount hang).
+        XCTAssertTrue(config.urlString.contains("jasine@"))
+        XCTAssertEqual(config.mountURLString, "smb://192.168.1.2/media")
+        XCTAssertFalse(config.mountURLString.contains("jasine"))
+    }
+
     func testSMBConfig_emptySharePath_isNotValidMountTarget() {
         let config = ServerConfig(alias: "nas", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "")
         XCTAssertFalse(config.isValidMountTarget)

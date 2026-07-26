@@ -114,23 +114,38 @@ struct ServerConfig: Codable, Identifiable {
         var components = URLComponents()
         components.scheme = serverProtocol.scheme
         components.host = hostname
-        
+
         let cleanPath = normalizedSharePath
-        
+
         // Path must start with / for URLComponents
         let pathToAdd = "/\(cleanPath)"
-        
-        // If sharePath is empty (or became empty), we might just want to point to root if allowed, 
+
+        // If sharePath is empty (or became empty), we might just want to point to root if allowed,
         // but typically for smb mounting we want a share.
         // If empty, URLComponents.path = "/" results in smb://host/
         if !cleanPath.isEmpty {
             components.path = pathToAdd
         }
-        
+
         if let user = username, !user.isEmpty {
             components.user = user
         }
-        
+
+        return components.string ?? ""
+    }
+
+    /// URL for mounting — deliberately WITHOUT credentials in the URL.
+    /// Credentials are passed as separate arguments to NetFSMountURLSync;
+    /// embedding the username in the URL *and* passing it as an argument makes
+    /// the mount hang. Used only for mounting, not for display (see urlString).
+    var mountURLString: String {
+        var components = URLComponents()
+        components.scheme = serverProtocol.scheme
+        components.host = hostname
+        let cleanPath = normalizedSharePath
+        if !cleanPath.isEmpty {
+            components.path = "/\(cleanPath)"
+        }
         return components.string ?? ""
     }
 }

@@ -227,7 +227,7 @@ class MountingManager {
             DispatchQueue.main.async { completion(result) }
         }
 
-        guard let url = URL(string: config.urlString) else {
+        guard let url = URL(string: config.mountURLString) else {
             wrappedCompletion(.failure(MountError.invalidURL))
             return
         }
