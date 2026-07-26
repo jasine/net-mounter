@@ -78,6 +78,13 @@ struct ServerConfig: Codable, Identifiable {
         sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
     }
 
+    /// A mount needs a concrete share/export path — `smb://host` with no share
+    /// (or NFS with no export) is not a mountable target and must be rejected
+    /// before calling into NetFS, which otherwise hangs on such input.
+    var isValidMountTarget: Bool {
+        !normalizedSharePath.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     var hasEnabledAutoMountRules: Bool {
         autoMountRules.contains { $0.enabled }
     }

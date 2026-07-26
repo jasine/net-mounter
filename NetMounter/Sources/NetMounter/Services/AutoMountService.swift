@@ -181,8 +181,8 @@ class AutoMountService: ObservableObject {
                             self?.learnMACIfNeeded(for: server)
                             onSuccess?()
                         case .failure(let error):
-                            if let mountError = error as? MountError, mountError.isAuthError {
-                                logger.warning("Auth required for \(server.alias), skipping retries. Add credentials in settings.")
+                            if let mountError = error as? MountError, mountError.isNonRetryable {
+                                logger.warning("Cannot mount \(server.alias) (\(mountError.localizedDescription)) — skipping retries. Fix the server config in settings.")
                                 NotificationService.shared.notifyMountFailed(server: server)
                             } else {
                                 logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
