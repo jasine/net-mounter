@@ -85,7 +85,8 @@ class MountingManager {
 
     /// The low-level SMB mount, injectable for testing. Default runs
     /// /sbin/mount_smbfs. Completion: (exitStatus, stderr).
-    var performSMBMount: ((String, String, @escaping (Int32, String) -> Void) -> Void)?
+    /// Returns a cancel closure that terminates the subprocess when invoked.
+    var performSMBMount: ((String, String, @escaping (Int32, String) -> Void) -> (() -> Void))?
 
     /// Timeout for a single NetFS mount attempt. If the mount does not report
     /// back within this window, the attempt is abandoned, the in-flight lock is
@@ -241,15 +242,18 @@ class MountingManager {
         }()
         let mountURL = config.smbMountURLString(password: password)
 
+        var cancelHandle: (() -> Void)? = nil
+
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + netFSMountTimeout) {
+            cancelHandle?()
             wrappedCompletion(.failure(MountError.timedOut))
         }
 
         let mountFn = performSMBMount ?? Self.defaultSMBMount
-        mountFn(mountURL, mountPoint) { status, stderr in
+        cancelHandle = mountFn(mountURL, mountPoint) { status, stderr in
             if status == 0 {
                 wrappedCompletion(.success(mountPoint))
-            } else if stderr.localizedCaseInsensitiveContains("authentication") {
+            } else if stderr.localizedCaseInsensitiveContains("authentication") || status == 77 || status == 13 {
                 wrappedCompletion(.failure(MountError.authenticationFailed))
             } else {
                 logger.error("mount_smbfs failed (\(status)): \(stderr)")
@@ -260,15 +264,16 @@ class MountingManager {
 
     /// Production SMB mount via /sbin/mount_smbfs. Runs the URL + mountpoint as
     /// arguments (no shell). Creates the mount point directory before running.
-    private static let defaultSMBMount: (String, String, @escaping (Int32, String) -> Void) -> Void = { url, mountPoint, completion in
+    /// Returns a cancel closure that terminates the subprocess when invoked.
+    private static let defaultSMBMount: (String, String, @escaping (Int32, String) -> Void) -> (() -> Void) = { url, mountPoint, completion in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/sbin/mount_smbfs")
+        process.arguments = [url, mountPoint]
+        let errPipe = Pipe()
+        process.standardError = errPipe
+        // mount_smbfs requires the mount point to already exist.
+        try? FileManager.default.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
         DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/sbin/mount_smbfs")
-            process.arguments = [url, mountPoint]
-            let errPipe = Pipe()
-            process.standardError = errPipe
-            // mount_smbfs requires the mount point to already exist.
-            try? FileManager.default.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
             do {
                 try process.run()
             } catch {
@@ -279,6 +284,9 @@ class MountingManager {
             process.waitUntilExit()
             let stderr = String(data: errData, encoding: .utf8) ?? ""
             completion(process.terminationStatus, stderr)
+        }
+        return {
+            if process.isRunning { process.terminate() }
         }
     }
 

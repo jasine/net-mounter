@@ -123,7 +123,7 @@ final class MountingManagerTests: XCTestCase {
     func testMountSMB_success_releasesLockAndReturnsPath() {
         let mgr = MountingManager.shared
         let config = ServerConfig(alias: "smb-ok", serverProtocol: .smb, hostname: "10.0.0.20", sharePath: "media")
-        mgr.performSMBMount = { _, mountPoint, completion in completion(0, "") }
+        mgr.performSMBMount = { _, mountPoint, completion in completion(0, ""); return {} }
         let exp = expectation(description: "done")
         var received: Result<String, Error>?
         mgr.mount(config: config) { received = $0; exp.fulfill() }
@@ -137,7 +137,7 @@ final class MountingManagerTests: XCTestCase {
         let mgr = MountingManager.shared
         let config = ServerConfig(alias: "smb-auth", serverProtocol: .smb, hostname: "10.0.0.21", sharePath: "media")
         // mount_smbfs exit 77 (EAUTH) with an "Authentication error" stderr.
-        mgr.performSMBMount = { _, _, completion in completion(77, "mount_smbfs: server rejected the authentication: Authentication error") }
+        mgr.performSMBMount = { _, _, completion in completion(77, "mount_smbfs: server rejected the authentication: Authentication error"); return {} }
         let exp = expectation(description: "done")
         var received: Result<String, Error>?
         mgr.mount(config: config) { received = $0; exp.fulfill() }
@@ -159,5 +159,56 @@ final class MountingManagerTests: XCTestCase {
         wait(for: [exp], timeout: 2)
         if case .failure = received {} else { XCTFail("expected failure") }
         XCTAssertFalse(mgr.isMountInFlight(config.id))
+    }
+
+    func testMountSMB_timeout_killsCancelHandle() {
+        let mgr = MountingManager.shared
+        let config = ServerConfig(alias: "smb-hang", serverProtocol: .smb, hostname: "10.0.0.23", sharePath: "media")
+        let exp = expectation(description: "timeout completion")
+        var received: Result<String, Error>?
+        var cancelInvoked = false
+
+        // Runner never calls completion — simulates a hung mount_smbfs process.
+        // Returns a cancel handle so we can verify it was called on timeout.
+        mgr.performSMBMount = { _, _, _ in
+            return { cancelInvoked = true }
+        }
+        mgr.netFSMountTimeout = 1.0
+
+        mgr.mount(config: config) { result in
+            received = result
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 3)
+
+        guard case .failure(let err) = received else {
+            XCTFail("expected timeout failure"); return
+        }
+        XCTAssertEqual(err as? MountError, MountError.timedOut)
+        XCTAssertFalse(mgr.isMountInFlight(config.id), "lock must be released after timeout")
+        XCTAssertTrue(cancelInvoked, "cancel handle must be invoked to kill the subprocess")
+
+        mgr.performSMBMount = nil
+        mgr.netFSMountTimeout = 30.0
+    }
+
+    func testMountSMB_authExitCode77_noStderr_isNonRetryable() {
+        let mgr = MountingManager.shared
+        let config = ServerConfig(alias: "smb-eauth", serverProtocol: .smb, hostname: "10.0.0.24", sharePath: "media")
+        // Exit code 77 (EAUTH) with empty stderr — no "authentication" word.
+        mgr.performSMBMount = { _, _, completion in
+            completion(77, "")
+            return {}
+        }
+        let exp = expectation(description: "done")
+        var received: Result<String, Error>?
+        mgr.mount(config: config) { received = $0; exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        guard case .failure(let err) = received, let me = err as? MountError else {
+            XCTFail("expected MountError failure"); return
+        }
+        XCTAssertTrue(me.isNonRetryable, "EAUTH exit code must map to non-retryable auth failure")
+        XCTAssertFalse(mgr.isMountInFlight(config.id))
+        mgr.performSMBMount = nil
     }
 }
