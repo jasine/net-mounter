@@ -36,4 +36,43 @@ final class PrivilegedMountInstallerTests: XCTestCase {
         XCTAssertTrue(PrivilegedMountInstaller.sudoersBody.contains(#"/Library/Application\ Support/NetMounter/nfs-mount.sh"#))
         XCTAssertTrue(PrivilegedMountInstaller.sudoersBody.contains("NOPASSWD:"))
     }
+
+    func testInstallScript_writesBothFilesWithCorrectPermissions() {
+        let script = PrivilegedMountInstaller.installScript()
+        // Creates parent dir
+        XCTAssertTrue(script.contains(#"mkdir -p "/Library/Application Support/NetMounter""#))
+        // Writes script then chown/chmod
+        XCTAssertTrue(script.contains("chown root:wheel"))
+        XCTAssertTrue(script.contains("chmod 755"))
+        // sudoers fragment is 440 and syntax-checked, rolled back on failure
+        XCTAssertTrue(script.contains("chmod 440"))
+        XCTAssertTrue(script.contains("visudo -cf"))
+    }
+
+    func testInstall_exitZero_installed() {
+        let exp = expectation(description: "done")
+        PrivilegedMountInstaller.install(runOSAScript: { _ in 0 }) { result in
+            if case .installed = result {} else { XCTFail("expected installed") }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1)
+    }
+
+    func testInstall_exitOne_cancelled() {
+        let exp = expectation(description: "done")
+        PrivilegedMountInstaller.install(runOSAScript: { _ in 1 }) { result in
+            if case .cancelled = result {} else { XCTFail("expected cancelled") }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1)
+    }
+
+    func testInstall_exitOther_failed() {
+        let exp = expectation(description: "done")
+        PrivilegedMountInstaller.install(runOSAScript: { _ in 42 }) { result in
+            if case .failed = result {} else { XCTFail("expected failed") }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 1)
+    }
 }
