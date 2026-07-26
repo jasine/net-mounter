@@ -30,17 +30,24 @@ final class PrivilegedMountInstallerTests: XCTestCase {
         XCTAssertTrue(PrivilegedMountInstaller.wrapperScriptBody.contains("/Volumes/*"))
         XCTAssertTrue(PrivilegedMountInstaller.wrapperScriptBody.contains("*..*"))
         XCTAssertTrue(PrivilegedMountInstaller.wrapperScriptBody.contains("/sbin/mount_nfs"))
+        // nosuid,nodev must be present to prevent setuid-root escalation via NFS export
+        XCTAssertTrue(PrivilegedMountInstaller.wrapperScriptBody.contains("nosuid,nodev"))
     }
 
     func testSudoersBody_escapesSpaceInPath() {
-        XCTAssertTrue(PrivilegedMountInstaller.sudoersBody.contains(#"/Library/Application\ Support/NetMounter/nfs-mount.sh"#))
-        XCTAssertTrue(PrivilegedMountInstaller.sudoersBody.contains("NOPASSWD:"))
+        let body = PrivilegedMountInstaller.sudoersBody(user: "someuser")
+        XCTAssertTrue(body.contains(#"/Library/Application\ Support/NetMounter/nfs-mount.sh"#))
+        XCTAssertTrue(body.contains("NOPASSWD:"))
+        XCTAssertTrue(body.hasPrefix("someuser ALL=(root) NOPASSWD:"))
     }
 
     func testInstallScript_writesBothFilesWithCorrectPermissions() {
         let script = PrivilegedMountInstaller.installScript()
         // Creates parent dir
         XCTAssertTrue(script.contains(#"mkdir -p "/Library/Application Support/NetMounter""#))
+        // Locks dir ownership and permissions
+        XCTAssertTrue(script.contains(#"chown root:wheel "/Library/Application Support/NetMounter""#))
+        XCTAssertTrue(script.contains(#"chmod 755 "/Library/Application Support/NetMounter""#))
         // Writes script then chown/chmod
         XCTAssertTrue(script.contains("chown root:wheel"))
         XCTAssertTrue(script.contains("chmod 755"))

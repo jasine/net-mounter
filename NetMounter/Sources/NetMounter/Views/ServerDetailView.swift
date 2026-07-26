@@ -255,7 +255,11 @@ struct ServerDetailView: View {
         // Fire-and-forget — cancellation or failure does not block saving; NFS
         // mounts then fall back to prompting per-mount.
         if config.serverProtocol == .nfs && !PrivilegedMountInstaller.isInstalled() {
-            PrivilegedMountInstaller.install { _ in }
+            PrivilegedMountInstaller.install { result in
+                if case .failed(let msg) = result {
+                    NSLog("[NetMounter] NFS passwordless-mount install failed: %@", msg)
+                }
+            }
         }
         presentationMode.wrappedValue.dismiss()
     }

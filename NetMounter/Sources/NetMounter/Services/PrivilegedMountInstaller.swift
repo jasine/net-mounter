@@ -22,10 +22,12 @@ enum PrivilegedMountInstaller {
       *..*) echo "refusing path traversal: $MOUNTPOINT" >&2; exit 1 ;;
     esac
     mkdir -p "$MOUNTPOINT"
-    exec /sbin/mount_nfs -o resvport,noowners "$SOURCE" "$MOUNTPOINT"
+    exec /sbin/mount_nfs -o resvport,noowners,nosuid,nodev -- "$SOURCE" "$MOUNTPOINT"
     """
 
-    static let sudoersBody = #"ALL ALL=(root) NOPASSWD: /Library/Application\ Support/NetMounter/nfs-mount.sh"# + "\n"
+    static func sudoersBody(user: String = NSUserName()) -> String {
+        return #"\#(user) ALL=(root) NOPASSWD: /Library/Application\ Support/NetMounter/nfs-mount.sh"# + "\n"
+    }
 
     static func isInstalled(fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Bool {
         fileExists(wrapperScriptPath) && fileExists(sudoersPath)
@@ -46,13 +48,15 @@ enum PrivilegedMountInstaller {
         return """
         set -e
         mkdir -p "\(dir)"
+        chown root:wheel "\(dir)"
+        chmod 755 "\(dir)"
         cat > "\(wrapperScriptPath)" <<'NETMOUNTER_WRAPPER_EOF'
         \(wrapperScriptBody)
         NETMOUNTER_WRAPPER_EOF
         chown root:wheel "\(wrapperScriptPath)"
         chmod 755 "\(wrapperScriptPath)"
         cat > "\(sudoersPath)" <<'NETMOUNTER_SUDOERS_EOF'
-        \(sudoersBody)NETMOUNTER_SUDOERS_EOF
+        \(sudoersBody())NETMOUNTER_SUDOERS_EOF
         chmod 440 "\(sudoersPath)"
         if ! visudo -cf "\(sudoersPath)"; then
           rm -f "\(sudoersPath)"

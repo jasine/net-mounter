@@ -274,7 +274,7 @@ class MountingManager {
             mountProcess.arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
         } else {
             // Fallback: prompt for admin password via osascript (pre-install behavior).
-            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
+            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners,nosuid,nodev \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
             let escapedShellCmd = appleScriptEscape(shellCmd)
             let script = silent
                 ? "do shell script \"\(escapedShellCmd)\""
