@@ -50,6 +50,34 @@ final class MountingManagerTests: XCTestCase {
         XCTAssertFalse(mgr.isMountInFlight(config.id), "lock must be released after invalid-target rejection")
     }
 
+    // MARK: - C: SMB credential URL builder (percent-encoded)
+
+    func testSMBMountURL_noCredentials() {
+        let c = ServerConfig(alias: "n", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        XCTAssertEqual(c.smbMountURLString(password: nil), "smb://192.168.1.2/media")
+    }
+
+    func testSMBMountURL_userAndPassword_plain() {
+        var c = ServerConfig(alias: "n", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        c.username = "jasine"
+        XCTAssertEqual(c.smbMountURLString(password: "secret"), "smb://jasine:secret@192.168.1.2/media")
+    }
+
+    func testSMBMountURL_specialCharsPercentEncoded() {
+        var c = ServerConfig(alias: "n", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        c.username = "user@dom"
+        // "@", ":", "/", " " must be percent-encoded so the URL parses correctly.
+        XCTAssertEqual(c.smbMountURLString(password: "p@ss:w/ d"),
+                       "smb://user%40dom:p%40ss%3Aw%2F%20d@192.168.1.2/media")
+    }
+
+    func testSMBMountURL_usernameSetButPasswordEmpty_omitsColon() {
+        var c = ServerConfig(alias: "n", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        c.username = "jasine"
+        XCTAssertEqual(c.smbMountURLString(password: nil), "smb://jasine@192.168.1.2/media")
+        XCTAssertEqual(c.smbMountURLString(password: ""), "smb://jasine@192.168.1.2/media")
+    }
+
     // MARK: - A: timeout releases the in-flight lock
 
     func testMountError_invalidShareAndAuth_areNonRetryable() {
