@@ -28,13 +28,25 @@ struct ServerDetailView: View {
             Form {
                 Section(header: Text("Server Details").foregroundColor(.secondary)) {
                     TextField("Name", text: $config.alias)
+                    Text("A label for this server, e.g. \"Home NAS\".")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
                     Picker("Protocol", selection: $config.serverProtocol) {
                         ForEach(NetworkProtocol.allCases, id: \.self) { proto in
                             Text(proto.displayName).tag(proto)
                         }
                     }
+
                     TextField("Hostname / IP", text: $config.hostname)
-                    TextField("Share Path", text: $config.sharePath)
+                    Text("IP or hostname only — no protocol prefix or slashes. e.g. 192.168.1.50, nas.local, or a Tailscale IP like 100.101.102.103.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    TextField(sharePathPlaceholder, text: $config.sharePath)
+                    Text(sharePathHelp)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 Section(header: Text("Authentication").foregroundColor(.secondary)) {
@@ -162,6 +174,21 @@ struct ServerDetailView: View {
         }
     }
     
+    private var sharePathPlaceholder: String {
+        config.serverProtocol == .nfs ? "Export Path" : "Share Path"
+    }
+
+    private var sharePathHelp: String {
+        switch config.serverProtocol {
+        case .smb, .afp:
+            return "The share name only, without slashes. For \\\\server\\media enter: media"
+        case .nfs:
+            return "The full export path from the server, e.g. /volume1/media (required for NFS)."
+        case .webdav:
+            return "Path to the WebDAV folder, e.g. remote.php/dav/files/user."
+        }
+    }
+
     private var mountPath: String? {
         guard let url = URL(string: config.urlString) else { return nil }
         return MountingManager.shared.findExistingMountPath(for: url)

@@ -58,6 +58,23 @@ Download the latest DMG from [GitHub Releases](https://github.com/jasine/net-mou
 4. Enter connection details and save
 5. One-click mount!
 
+## 🧭 Setup Guide
+
+When adding a server manually (`+` button), fill in these fields:
+
+| Field | What to enter | Example |
+|-------|---------------|---------|
+| **Name** | Any label you like | `Home NAS` |
+| **Protocol** | The sharing protocol the server uses | `SMB` |
+| **Hostname / IP** | IP or hostname **only** — no `smb://` prefix, no slashes | `192.168.1.50`, `nas.local`, `100.101.102.103` (Tailscale) |
+| **Share Path** | For SMB/AFP: the share **name** only. For NFS: the full export path. | SMB: `media` &nbsp;·&nbsp; NFS: `/volume1/media` |
+| **Username / Password** | Credentials (not needed for NFS) | `guest` |
+
+Tips:
+- For a Windows share `\\SERVER\media`, enter `SERVER` (or its IP) as the host and `media` as the share path.
+- **Tailscale**: use the machine's Tailscale IP (`100.x.x.x`) or MagicDNS name as the hostname, then add the share manually — see discovery note below.
+- **NFS** requires an export path and uses host-based access control, so no username/password.
+
 ## 📡 Network Discovery
 
 NetMounter can automatically discover network servers and shares:
@@ -67,6 +84,16 @@ NetMounter can automatically discover network servers and shares:
 3. Discovered SMB/AFP hosts are also probed for NFS (port 2049)
 4. Expand a server to browse its shares (SMB shares via `smbutil`, NFS exports via `showmount`)
 5. Click `+` to add any discovered share to your server list
+
+> **Bonjour only finds hosts that advertise themselves via mDNS** — mostly NAS
+> devices and Macs. Two common cases won't appear in the automatic scan:
+> - **Windows shares** — Windows doesn't advertise SMB over Bonjour by default.
+> - **Tailscale / VPN hosts** — mDNS is link-local and doesn't cross the tailnet.
+>
+> **Scan Subnet** button: probes every host on your local `/24` for SMB/AFP/NFS
+> ports, which surfaces Windows shares and other non-advertising hosts on the
+> same LAN. Tailscale hosts are on a routed overlay (no local subnet), so add
+> those **manually** using the Tailscale IP or MagicDNS name (see Setup Guide).
 
 ## 📋 Supported Protocols
 

@@ -58,6 +58,23 @@ brew install --cask netmounter
 4. 输入连接信息并保存
 5. 一键挂载！
 
+## 🧭 配置指南
+
+手动添加服务器（`+` 按钮）时，各字段填写说明：
+
+| 字段 | 填写内容 | 示例 |
+|------|----------|------|
+| **名称** | 任意标签 | `家庭 NAS` |
+| **协议** | 服务器使用的共享协议 | `SMB` |
+| **主机名 / IP** | **仅填** IP 或主机名，不带 `smb://` 前缀，不带斜杠 | `192.168.1.50`、`nas.local`、`100.101.102.103`（Tailscale） |
+| **共享路径** | SMB/AFP 只填共享**名称**；NFS 填完整导出路径 | SMB：`media` &nbsp;·&nbsp; NFS：`/volume1/media` |
+| **用户名 / 密码** | 凭据（NFS 不需要） | `guest` |
+
+提示：
+- 对于 Windows 共享 `\\SERVER\media`，主机填 `SERVER`（或其 IP），共享路径填 `media`。
+- **Tailscale**：主机名填该机器的 Tailscale IP（`100.x.x.x`）或 MagicDNS 名称，然后手动添加共享 —— 见下方发现说明。
+- **NFS** 需要导出路径，并使用基于主机的访问控制，因此无需用户名/密码。
+
 ## 📡 网络发现
 
 NetMounter 可以自动发现局域网内的网络服务器和共享：
@@ -67,6 +84,15 @@ NetMounter 可以自动发现局域网内的网络服务器和共享：
 3. 发现的 SMB/AFP 主机会自动探测是否也提供 NFS 服务（端口 2049）
 4. 展开服务器可浏览其共享目录（SMB 通过 `smbutil`，NFS 通过 `showmount`）
 5. 点击 `+` 将发现的共享添加到服务器列表
+
+> **Bonjour 只能发现通过 mDNS 广播自身的主机** —— 主要是 NAS 设备和 Mac。
+> 有两种常见情况不会出现在自动扫描中：
+> - **Windows 共享** —— Windows 默认不通过 Bonjour 广播 SMB。
+> - **Tailscale / VPN 主机** —— mDNS 是链路本地的，无法跨越 tailnet。
+>
+> **扫描子网**按钮：探测本地 `/24` 网段内每台主机的 SMB/AFP/NFS 端口，
+> 可发现 Windows 共享等不广播的主机。Tailscale 主机位于路由式叠加网络
+> （没有本地子网），请使用其 Tailscale IP 或 MagicDNS 名称**手动添加**（见配置指南）。
 
 ## 📋 支持的协议
 
