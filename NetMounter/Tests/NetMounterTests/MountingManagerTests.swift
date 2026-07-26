@@ -91,7 +91,7 @@ final class MountingManagerTests: XCTestCase {
 
     func testNetFSMount_whenMountHangs_timesOutAndReleasesLock() {
         let mgr = MountingManager.shared
-        let config = ServerConfig(alias: "hang", serverProtocol: .smb, hostname: "10.0.0.10", sharePath: "share")
+        let config = ServerConfig(alias: "hang", serverProtocol: .afp, hostname: "10.0.0.10", sharePath: "share")
         let exp = expectation(description: "timeout completion")
         var received: Result<String, Error>?
 
@@ -116,5 +116,48 @@ final class MountingManagerTests: XCTestCase {
         // reset injected state so other tests are unaffected
         mgr.performNetFSMount = nil
         mgr.netFSMountTimeout = 30.0
+    }
+
+    // MARK: - D: SMB via mount_smbfs subprocess
+
+    func testMountSMB_success_releasesLockAndReturnsPath() {
+        let mgr = MountingManager.shared
+        let config = ServerConfig(alias: "smb-ok", serverProtocol: .smb, hostname: "10.0.0.20", sharePath: "media")
+        mgr.performSMBMount = { _, mountPoint, completion in completion(0, "") }
+        let exp = expectation(description: "done")
+        var received: Result<String, Error>?
+        mgr.mount(config: config) { received = $0; exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        if case .success = received {} else { XCTFail("expected success") }
+        XCTAssertFalse(mgr.isMountInFlight(config.id))
+        mgr.performSMBMount = nil
+    }
+
+    func testMountSMB_authFailure_mapsToNonRetryable() {
+        let mgr = MountingManager.shared
+        let config = ServerConfig(alias: "smb-auth", serverProtocol: .smb, hostname: "10.0.0.21", sharePath: "media")
+        // mount_smbfs exit 77 (EAUTH) with an "Authentication error" stderr.
+        mgr.performSMBMount = { _, _, completion in completion(77, "mount_smbfs: server rejected the authentication: Authentication error") }
+        let exp = expectation(description: "done")
+        var received: Result<String, Error>?
+        mgr.mount(config: config) { received = $0; exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        guard case .failure(let err) = received, let me = err as? MountError else {
+            XCTFail("expected MountError failure"); return
+        }
+        XCTAssertTrue(me.isNonRetryable, "auth failure must not be retried")
+        XCTAssertFalse(mgr.isMountInFlight(config.id))
+        mgr.performSMBMount = nil
+    }
+
+    func testMountSMB_emptyShare_failsFastWithoutLock() {
+        let mgr = MountingManager.shared
+        let config = ServerConfig(alias: "smb-empty", serverProtocol: .smb, hostname: "10.0.0.22", sharePath: "")
+        let exp = expectation(description: "done")
+        var received: Result<String, Error>?
+        mgr.mount(config: config) { received = $0; exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+        if case .failure = received {} else { XCTFail("expected failure") }
+        XCTAssertFalse(mgr.isMountInFlight(config.id))
     }
 }
