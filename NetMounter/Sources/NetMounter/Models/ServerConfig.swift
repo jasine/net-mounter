@@ -148,26 +148,4 @@ struct ServerConfig: Codable, Identifiable {
         }
         return components.string ?? ""
     }
-
-    /// Mount URL for SMB, credentials embedded and percent-encoded so any
-    /// special characters parse correctly. Used only to invoke mount_smbfs;
-    /// not for display (see urlString). Password nil/empty omits ":password";
-    /// empty username omits the userinfo entirely.
-    func smbMountURLString(password: String?) -> String {
-        let share = normalizedSharePath
-        let host = hostname
-        guard let user = username, !user.isEmpty else {
-            return "smb://\(host)/\(share)"
-        }
-        func enc(_ s: String) -> String {
-            s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s
-        }
-        let userInfo: String
-        if let pw = password, !pw.isEmpty {
-            userInfo = "\(enc(user)):\(enc(pw))"
-        } else {
-            userInfo = enc(user)
-        }
-        return "smb://\(userInfo)@\(host)/\(share)"
-    }
 }

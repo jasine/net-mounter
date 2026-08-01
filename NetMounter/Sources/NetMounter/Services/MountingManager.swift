@@ -83,11 +83,6 @@ class MountingManager {
     /// completion.
     var performNetFSMount: ((URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> Void)?
 
-    /// The low-level SMB mount, injectable for testing. Default runs
-    /// /sbin/mount_smbfs. Completion: (exitStatus, stderr).
-    /// Returns a cancel closure that terminates the subprocess when invoked.
-    var performSMBMount: ((String, String, @escaping (Int32, String) -> Void) -> (() -> Void))?
-
     /// Timeout for a single NetFS mount attempt. If the mount does not report
     /// back within this window, the attempt is abandoned, the in-flight lock is
     /// released, and `.timedOut` is returned — preventing a hung mount from
@@ -116,9 +111,7 @@ class MountingManager {
         switch config.serverProtocol {
         case .nfs:
             mountNFS(config: config, silent: silent, completion: completion)
-        case .smb:
-            mountSMB(config: config, completion: completion)
-        case .afp, .webdav:
+        case .smb, .afp, .webdav:
             mountNetFS(config: config, silent: silent, completion: completion)
         }
     }
@@ -204,93 +197,7 @@ class MountingManager {
         process.waitUntilExit()
     }
 
-    // MARK: - SMB Mount via mount_smbfs
-
-    private func mountSMB(config: ServerConfig, completion: @escaping (Result<String, Error>) -> Void) {
-        guard config.isValidMountTarget else {
-            DispatchQueue.main.async { completion(.failure(MountError.invalidShare)) }
-            return
-        }
-        guard markInflight(config.id) else {
-            logger.debug("Mount already in-flight for \(config.alias), skipping")
-            DispatchQueue.main.async { completion(.failure(MountError.mountFailed(EBUSY))) }
-            return
-        }
-
-        let didComplete = NSLock()
-        var completed = false
-        let wrappedCompletion: (Result<String, Error>) -> Void = { [weak self] result in
-            didComplete.lock()
-            if completed { didComplete.unlock(); return }
-            completed = true
-            didComplete.unlock()
-            self?.clearInflight(config.id)
-            DispatchQueue.main.async { completion(result) }
-        }
-
-        let mountPoint = "/Volumes/\(config.normalizedSharePath.components(separatedBy: "/").last ?? config.normalizedSharePath)"
-
-        // Already mounted and alive?
-        if let url = URL(string: config.mountURLString), let existing = findExistingMountPath(for: url) {
-            if isMountAlive(existing) { wrappedCompletion(.success(existing)); return }
-            else { forceUnmount(path: existing) }
-        }
-
-        let password: String? = {
-            guard let keyId = config.keychainItemId else { return nil }
-            return KeychainManager.shared.retrievePassword(for: keyId)
-        }()
-        let mountURL = config.smbMountURLString(password: password)
-
-        var cancelHandle: (() -> Void)? = nil
-
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + netFSMountTimeout) {
-            cancelHandle?()
-            wrappedCompletion(.failure(MountError.timedOut))
-        }
-
-        let mountFn = performSMBMount ?? Self.defaultSMBMount
-        cancelHandle = mountFn(mountURL, mountPoint) { status, stderr in
-            if status == 0 {
-                wrappedCompletion(.success(mountPoint))
-            } else if stderr.localizedCaseInsensitiveContains("authentication") || status == 77 || status == 13 {
-                wrappedCompletion(.failure(MountError.authenticationFailed))
-            } else {
-                logger.error("mount_smbfs failed (\(status)): \(stderr)")
-                wrappedCompletion(.failure(MountError.mountFailed(status)))
-            }
-        }
-    }
-
-    /// Production SMB mount via /sbin/mount_smbfs. Runs the URL + mountpoint as
-    /// arguments (no shell). Creates the mount point directory before running.
-    /// Returns a cancel closure that terminates the subprocess when invoked.
-    private static let defaultSMBMount: (String, String, @escaping (Int32, String) -> Void) -> (() -> Void) = { url, mountPoint, completion in
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/sbin/mount_smbfs")
-        process.arguments = [url, mountPoint]
-        let errPipe = Pipe()
-        process.standardError = errPipe
-        // mount_smbfs requires the mount point to already exist.
-        try? FileManager.default.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try process.run()
-            } catch {
-                completion(-1, error.localizedDescription)
-                return
-            }
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            let stderr = String(data: errData, encoding: .utf8) ?? ""
-            completion(process.terminationStatus, stderr)
-        }
-        return {
-            if process.isRunning { process.terminate() }
-        }
-    }
-
-    // MARK: - AFP/WebDAV Mount via NetFS
+    // MARK: - SMB/AFP/WebDAV Mount via NetFS
 
     private func mountNetFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
         // Reject un-mountable targets (e.g. smb://host with no share) before
