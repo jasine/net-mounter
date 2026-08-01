@@ -20,11 +20,23 @@ struct DiscoveryView: View {
                         .foregroundColor(.primary)
                     Spacer()
 
-                    if discoveryService.isScanning {
+                    if discoveryService.isScanning || discoveryService.isSubnetScanning {
                         ProgressView()
                             .controlSize(.small)
                             .padding(.trailing, 4)
                     }
+
+                    Button("Scan Subnet") {
+                        discoveryService.startSubnetScan()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial)
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+                    .disabled(discoveryService.isSubnetScanning)
+                    .help("Probe the local subnet for SMB/AFP/NFS hosts that don't advertise via Bonjour (e.g. Windows shares).")
 
                     Button("Done") {
                         dismiss()
@@ -89,6 +101,7 @@ struct DiscoveryView: View {
         }
         .onDisappear {
             discoveryService.stopScan()
+            discoveryService.stopSubnetScan()
         }
     }
 

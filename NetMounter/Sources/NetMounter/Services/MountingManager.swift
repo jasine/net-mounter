@@ -4,9 +4,11 @@ import Logging
 
 private let logger = Logger(label: "MountingManager")
 
-enum MountError: LocalizedError {
+enum MountError: LocalizedError, Equatable {
     case mountFailed(Int32)
     case invalidURL
+    case invalidShare
+    case timedOut
     case authenticationRequired
     case authenticationFailed
 
@@ -19,6 +21,10 @@ enum MountError: LocalizedError {
             return "Mount failed with error code: \(code)"
         case .invalidURL:
             return "Invalid URL constructed."
+        case .invalidShare:
+            return "Missing share name. Enter the share/export path for this server."
+        case .timedOut:
+            return "Mount timed out. The server did not respond."
         case .authenticationRequired:
             return "Authentication required. Please add credentials."
         case .authenticationFailed:
@@ -34,6 +40,18 @@ enum MountError: LocalizedError {
             return code == 80 || code == 1 || code == 13
         default:
             return false
+        }
+    }
+
+    /// Errors that won't be fixed by retrying — the user must change the config.
+    /// Retrying these just wastes attempts (and, for invalidShare, would loop on
+    /// a target that can never mount).
+    var isNonRetryable: Bool {
+        switch self {
+        case .invalidShare, .invalidURL:
+            return true
+        default:
+            return isAuthError
         }
     }
 }
@@ -52,6 +70,24 @@ class MountingManager {
 
     private let inflightLock = NSLock()
     private var inflightMounts: Set<UUID> = []
+
+    /// Result of a low-level NetFS mount attempt.
+    enum NetFSMountResult {
+        case success(String?)   // resolved mount path, if any
+        case failure(Int32)     // NetFS/errno status code
+    }
+
+    /// The low-level mount call, injectable for testing. Production uses
+    /// NetFSMountURLSync; tests substitute a stub (e.g. one that never calls
+    /// back, to exercise the timeout path). Parameters: url, user, password,
+    /// completion.
+    var performNetFSMount: ((URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> Void)?
+
+    /// Timeout for a single NetFS mount attempt. If the mount does not report
+    /// back within this window, the attempt is abandoned, the in-flight lock is
+    /// released, and `.timedOut` is returned — preventing a hung mount from
+    /// wedging the lock forever.
+    var netFSMountTimeout: TimeInterval = 30.0
 
     func isMountInFlight(_ serverID: UUID) -> Bool {
         inflightLock.lock()
@@ -72,12 +108,12 @@ class MountingManager {
     }
 
     func mount(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
-        if config.serverProtocol == .nfs {
+        switch config.serverProtocol {
+        case .nfs:
             mountNFS(config: config, silent: silent, completion: completion)
-            return
+        case .smb, .afp, .webdav:
+            mountNetFS(config: config, silent: silent, completion: completion)
         }
-
-        mountNetFS(config: config, silent: silent, completion: completion)
     }
 
     func findExistingMountPath(for url: URL) -> String? {
@@ -161,21 +197,37 @@ class MountingManager {
         process.waitUntilExit()
     }
 
-    // MARK: - AFP/WebDAV Mount via NetFS
+    // MARK: - SMB/AFP/WebDAV Mount via NetFS
 
     private func mountNetFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+        // Reject un-mountable targets (e.g. smb://host with no share) before
+        // touching NetFS — such input makes NetFSMountURLSync hang.
+        guard config.isValidMountTarget else {
+            DispatchQueue.main.async { completion(.failure(MountError.invalidShare)) }
+            return
+        }
+
         guard markInflight(config.id) else {
             logger.debug("Mount already in-flight for \(config.alias), skipping")
             DispatchQueue.main.async { completion(.failure(MountError.mountFailed(EBUSY))) }
             return
         }
 
+        // Release the lock and report exactly once, even if both the mount and
+        // the timeout fire.
+        let didComplete = NSLock()
+        var completed = false
         let wrappedCompletion: (Result<String, Error>) -> Void = { [weak self] result in
+            didComplete.lock()
+            if completed { didComplete.unlock(); return }
+            completed = true
+            didComplete.unlock()
+
             self?.clearInflight(config.id)
             DispatchQueue.main.async { completion(result) }
         }
 
-        guard let url = URL(string: config.urlString) else {
+        guard let url = URL(string: config.mountURLString) else {
             wrappedCompletion(.failure(MountError.invalidURL))
             return
         }
@@ -189,33 +241,53 @@ class MountingManager {
             }
         }
 
-        let user: CFString? = config.username as CFString?
-        let password: CFString? = {
+        let user = config.username
+        let password: String? = {
             guard let keyId = config.keychainItemId else { return nil }
-            return KeychainManager.shared.retrievePassword(for: keyId) as CFString?
+            return KeychainManager.shared.retrievePassword(for: keyId)
         }()
 
-        let openOptions: CFMutableDictionary? = silent ? Self.noUIOptions() : nil
+        // Timeout guard: if the mount never reports back within the window,
+        // abandon it, release the lock, and return .timedOut so a hung mount
+        // cannot wedge the lock forever.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + netFSMountTimeout) {
+            wrappedCompletion(.failure(MountError.timedOut))
+        }
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            var mountpoints: Unmanaged<CFArray>? = nil
-
-            let result = NetFSMountURLSync(url as CFURL, nil, user, password, openOptions, nil, &mountpoints)
-
-            if result == 0 {
-                if let mounts = mountpoints?.takeRetainedValue() as? [String], let firstMount = mounts.first {
-                    wrappedCompletion(.success(firstMount))
-                } else {
-                    wrappedCompletion(.success("Mounted (Unknown Path)"))
-                }
-            } else if result == 17 || result == EEXIST {
-                if let existingPath = self.findExistingMountPath(for: url), self.isMountAlive(existingPath) {
+        let mountFn = performNetFSMount ?? Self.defaultNetFSMount
+        mountFn(url, user, password) { [weak self] mountResult in
+            guard let self = self else { return }
+            switch mountResult {
+            case .success(let path):
+                wrappedCompletion(.success(path ?? "Mounted (Unknown Path)"))
+            case .failure(let code):
+                if code == 17 || code == EEXIST,
+                   let existingPath = self.findExistingMountPath(for: url),
+                   self.isMountAlive(existingPath) {
                     wrappedCompletion(.success(existingPath))
                 } else {
-                    wrappedCompletion(.failure(MountError.mountFailed(result)))
+                    wrappedCompletion(.failure(MountError.mountFailed(code)))
                 }
+            }
+        }
+    }
+
+    /// Production NetFS mount. Suppresses NetFS's own auth UI (NoUI): credentials
+    /// come from the app's own fields, not a system dialog that cannot be shown
+    /// from a background thread.
+    private static let defaultNetFSMount: (URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> Void = { url, user, password, completion in
+        DispatchQueue.global(qos: .userInitiated).async {
+            var mountpoints: Unmanaged<CFArray>? = nil
+            let result = NetFSMountURLSync(
+                url as CFURL, nil,
+                user as CFString?, password as CFString?,
+                noUIOptions(), nil, &mountpoints
+            )
+            if result == 0 {
+                let path = (mountpoints?.takeRetainedValue() as? [String])?.first
+                completion(.success(path))
             } else {
-                wrappedCompletion(.failure(MountError.mountFailed(result)))
+                completion(.failure(result))
             }
         }
     }
@@ -265,36 +337,42 @@ class MountingManager {
         let mountPoint = "/Volumes/\(mountName)"
         let nfsSource = "\(config.hostname):\(sharePath)"
 
-        let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
-        let escapedShellCmd = appleScriptEscape(shellCmd)
-        let script = silent
-            ? "do shell script \"\(escapedShellCmd)\""
-            : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
+        let mountProcess = Process()
+        let errorPipe = Pipe()
+
+        if PrivilegedMountInstaller.isInstalled() {
+            // Passwordless path: root-owned wrapper via `sudo -n` (non-interactive).
+            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            mountProcess.arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
+        } else {
+            // Fallback: prompt for admin password via osascript (pre-install behavior).
+            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners,nosuid,nodev \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
+            let escapedShellCmd = appleScriptEscape(shellCmd)
+            let script = silent
+                ? "do shell script \"\(escapedShellCmd)\""
+                : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
+            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            mountProcess.arguments = ["-e", script]
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-
-            let errorPipe = Pipe()
-            process.standardError = errorPipe
-
+            mountProcess.standardError = errorPipe
             do {
-                try process.run()
+                try mountProcess.run()
             } catch {
                 wrappedCompletion(.failure(error))
                 return
             }
 
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            mountProcess.waitUntilExit()
 
-            if process.terminationStatus == 0 {
+            if mountProcess.terminationStatus == 0 {
                 wrappedCompletion(.success(mountPoint))
             } else {
                 let stderr = String(data: errorData, encoding: .utf8) ?? ""
                 logger.error("NFS mount failed: \(stderr)")
-                wrappedCompletion(.failure(MountError.mountFailed(process.terminationStatus)))
+                wrappedCompletion(.failure(MountError.mountFailed(mountProcess.terminationStatus)))
             }
         }
     }

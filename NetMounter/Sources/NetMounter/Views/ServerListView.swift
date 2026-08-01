@@ -328,6 +328,9 @@ struct ServerRow: View {
         .onReceive(networkPublisher) { fingerprint in
             handleNetworkChange(fingerprint)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .mountStateDidChange)) { _ in
+            checkMountStatus()
+        }
         .alert("Delete Server", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) { onDelete() }
             Button("Cancel", role: .cancel) { }
@@ -421,6 +424,7 @@ struct ServerRow: View {
                     isMounted = true
                     currentMountPath = path
                     mountStatus = "Mounted at: \(path)"
+                    NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
                     action(path)
                 case .failure(let error):
                     isMounted = false
@@ -449,6 +453,7 @@ struct ServerRow: View {
                         isMounted = false
                         currentMountPath = nil
                         mountStatus = "Idle"
+                        NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
                     }
                 }
             }

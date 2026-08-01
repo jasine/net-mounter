@@ -11,6 +11,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     var autoMountService: AutoMountService!
     var sleepWakeManager: SleepWakeManager!
     private var statusIconTimer: AnyCancellable?
+    private var mountStateObserver: AnyCancellable?
+    private var fingerprintObserver: AnyCancellable?
     var preventPopoverClose = false
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,6 +67,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         statusIconTimer = Timer.publish(every: 10, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.updateStatusIcon() }
+
+        mountStateObserver = NotificationCenter.default
+            .publisher(for: .mountStateDidChange)
+            .sink { [weak self] _ in self?.updateStatusIcon() }
+
+        // The status icon depends on the network fingerprint, which resolves
+        // asynchronously after launch. Refresh as soon as it lands instead of
+        // waiting for the 10s timer, otherwise the icon shows the placeholder
+        // (idle/wifi) until then.
+        fingerprintObserver = NetworkMonitor.shared.$currentFingerprint
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateStatusIcon() }
+
+        updateStatusIcon()
     }
 
     private func updateStatusIcon() {

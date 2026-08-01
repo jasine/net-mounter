@@ -45,6 +45,7 @@ class NetworkDiscoveryService: ObservableObject {
     @Published var servers: [DiscoveredServer] = []
     @Published var shares: [UUID: [DiscoveredShare]] = [:]
     @Published var isScanning: Bool = false
+    @Published var isSubnetScanning: Bool = false
     @Published var isEnumeratingShares: [UUID: Bool] = [:]
 
     private var smbBrowser: NWBrowser?
@@ -55,6 +56,10 @@ class NetworkDiscoveryService: ObservableObject {
     // Track pending resolutions to avoid duplicates
     private var pendingResults: [NWBrowser.Result] = []
     private var resolveConnections: [NWConnection] = []
+
+    // Subnet scan state
+    private var subnetConnections: [NWConnection] = []
+    private var subnetPendingProbes: Int = 0
 
     func startScan() {
         logger.info("Starting network discovery scan")
@@ -101,6 +106,153 @@ class NetworkDiscoveryService: ObservableObject {
         DispatchQueue.main.async {
             self.isScanning = false
         }
+    }
+
+    // MARK: - Subnet Scan
+
+    /// Probe every host on the local /24 subnet for SMB/AFP/NFS ports.
+    /// Complements Bonjour discovery, which only finds hosts that advertise
+    /// themselves via mDNS (e.g. Windows shares and manual hosts stay hidden).
+    func startSubnetScan() {
+        guard !isSubnetScanning else { return }
+
+        guard let prefix = Self.localSubnetPrefix() else {
+            logger.warning("Subnet scan: could not determine local IPv4 subnet")
+            return
+        }
+
+        logger.info("Starting subnet scan on \(prefix).0/24")
+        DispatchQueue.main.async {
+            self.isSubnetScanning = true
+        }
+
+        // (protocol, port) pairs to probe on each host
+        let probes: [(NetworkProtocol, UInt16)] = [
+            (.smb, 445),
+            (.afp, 548),
+            (.nfs, 2049),
+        ]
+
+        browserQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.subnetPendingProbes = 254 * probes.count
+            for hostByte in 1...254 {
+                let host = "\(prefix).\(hostByte)"
+                for (proto, port) in probes {
+                    self.probeSubnetHost(host: host, port: port, protocolType: proto)
+                }
+            }
+        }
+    }
+
+    func stopSubnetScan() {
+        browserQueue.async { [weak self] in
+            guard let self = self else { return }
+            for conn in self.subnetConnections {
+                conn.cancel()
+            }
+            self.subnetConnections.removeAll()
+            self.subnetPendingProbes = 0
+        }
+        DispatchQueue.main.async {
+            self.isSubnetScanning = false
+        }
+    }
+
+    private func probeSubnetHost(host: String, port: UInt16, protocolType: NetworkProtocol) {
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+        let connection = NWConnection(to: endpoint, using: .tcp)
+
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+            switch state {
+            case .ready:
+                let server = DiscoveredServer(
+                    name: host,
+                    host: host,
+                    port: port,
+                    protocolType: protocolType
+                )
+                DispatchQueue.main.async {
+                    if !self.servers.contains(where: { $0.host == host && $0.protocolType == protocolType }) {
+                        self.servers.append(server)
+                        logger.info("Subnet scan: found \(protocolType.displayName) on \(host)")
+                    }
+                }
+                connection.cancel()
+                self.subnetProbeFinished()
+            case .failed, .waiting:
+                // Port closed, filtered, or host absent
+                connection.cancel()
+                self.subnetProbeFinished()
+            case .cancelled:
+                break
+            default:
+                break
+            }
+        }
+
+        browserQueue.async { [weak self] in
+            self?.subnetConnections.append(connection)
+        }
+        connection.start(queue: browserQueue)
+
+        // Timeout: unreachable hosts never reach .failed quickly, so cap the wait.
+        browserQueue.asyncAfter(deadline: .now() + 2) { [weak self] in
+            if connection.state != .cancelled {
+                connection.cancel()
+                self?.subnetProbeFinished()
+            }
+        }
+    }
+
+    /// Called once per probe when it resolves (ready/failed/timeout). Guarded so
+    /// a probe that both fails and times out only decrements once.
+    private func subnetProbeFinished() {
+        browserQueue.async { [weak self] in
+            guard let self = self, self.subnetPendingProbes > 0 else { return }
+            self.subnetPendingProbes -= 1
+            if self.subnetPendingProbes == 0 {
+                DispatchQueue.main.async {
+                    self.isSubnetScanning = false
+                }
+                logger.info("Subnet scan complete")
+            }
+        }
+    }
+
+    /// Determine the local IPv4 /24 prefix (e.g. "192.168.1") from active interfaces.
+    private static func localSubnetPrefix() -> String? {
+        var address: String?
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return nil }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let iface = ptr {
+            let flags = Int32(iface.pointee.ifa_flags)
+            let family = iface.pointee.ifa_addr.pointee.sa_family
+            // Up, running, not loopback, IPv4
+            if (flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING),
+               (flags & IFF_LOOPBACK) == 0,
+               family == UInt8(AF_INET) {
+                let name = String(cString: iface.pointee.ifa_name)
+                // Prefer physical/Wi-Fi interfaces; skip VPN/utun (no /24 broadcast domain)
+                if name.hasPrefix("en") {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(iface.pointee.ifa_addr, socklen_t(iface.pointee.ifa_addr.pointee.sa_len),
+                                &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+                    address = String(cString: host)
+                    break
+                }
+            }
+            ptr = iface.pointee.ifa_next
+        }
+
+        guard let ip = address else { return nil }
+        let octets = ip.split(separator: ".")
+        guard octets.count == 4 else { return nil }
+        return "\(octets[0]).\(octets[1]).\(octets[2])"
     }
 
     private func setupBrowser(_ browser: NWBrowser, protocolType: NetworkProtocol) {
