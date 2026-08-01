@@ -3,3 +3,4 @@
 .DS_Store
 *.dmg
 .claude/
+**/docs/superpowers/
