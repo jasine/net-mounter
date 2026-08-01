@@ -178,6 +178,7 @@ class AutoMountService: ObservableObject {
                         case .success(let path):
                             logger.info("Mounted \(server.alias) at \(path)")
                             NotificationService.shared.notifyMountSucceeded(server: server)
+                            NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
                             self?.learnMACIfNeeded(for: server)
                             onSuccess?()
                         case .failure(let error):

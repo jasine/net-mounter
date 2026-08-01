@@ -4,6 +4,12 @@ import Logging
 
 private let logger = Logger(label: "AppState")
 
+extension Notification.Name {
+    /// Posted when a mount/unmount completes so the UI and menu-bar icon can
+    /// refresh immediately instead of waiting for their poll timers.
+    static let mountStateDidChange = Notification.Name("NetMounter.mountStateDidChange")
+}
+
 enum MountStatus {
     case idle
     case allConnected
