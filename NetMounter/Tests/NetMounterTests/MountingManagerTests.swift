@@ -102,4 +102,89 @@ final class MountingManagerTests: XCTestCase {
         if case .failure = received {} else { XCTFail("expected failure") }
         XCTAssertFalse(mgr.isMountInFlight(config.id))
     }
+
+    // MARK: - Host:Port Parsing (Issue #13)
+    // Users commonly enter "host:port" in the single hostname field, especially
+    // for WebDAV on non-standard ports. Without parsing, the colon lands inside
+    // URLComponents.host, which rejects it and makes mountURLString empty.
+
+    func testParsedHost_plainHostname_hasNoPort() {
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "nas.local", sharePath: "d")
+        XCTAssertEqual(c.parsedHost, "nas.local")
+        XCTAssertNil(c.parsedPort)
+    }
+
+    func testParsedHost_ipv4WithPort_splitsCorrectly() {
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "192.168.31.249:5702", sharePath: "dav")
+        XCTAssertEqual(c.parsedHost, "192.168.31.249")
+        XCTAssertEqual(c.parsedPort, 5702)
+    }
+
+    func testParsedHost_bracketedIPv6WithPort_splitsCorrectly() {
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "[::1]:8080", sharePath: "dav")
+        XCTAssertEqual(c.parsedHost, "::1")
+        XCTAssertEqual(c.parsedPort, 8080)
+    }
+
+    func testParsedHost_bracketedIPv6WithoutPort_stripsBrackets() {
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "[fe80::1]", sharePath: "d")
+        XCTAssertEqual(c.parsedHost, "fe80::1")
+        XCTAssertNil(c.parsedPort)
+    }
+
+    func testParsedHost_bareIPv6WithoutPort_passesThrough() {
+        // No brackets, multiple colons → clearly IPv6, no port.
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "fe80::1", sharePath: "d")
+        XCTAssertEqual(c.parsedHost, "fe80::1")
+        XCTAssertNil(c.parsedPort)
+    }
+
+    func testParsedHost_invalidPortSuffix_treatsWholeAsHost() {
+        // Non-numeric suffix is not a port; leave the field untouched so the
+        // user sees the same string in error messages.
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "host:notaport", sharePath: "d")
+        XCTAssertEqual(c.parsedHost, "host:notaport")
+        XCTAssertNil(c.parsedPort)
+    }
+
+    func testParsedHost_portOutOfRange_treatsWholeAsHost() {
+        let c = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "host:70000", sharePath: "d")
+        XCTAssertEqual(c.parsedHost, "host:70000")
+        XCTAssertNil(c.parsedPort)
+    }
+
+    func testMountURLString_webdavWithCustomPort_includesPort() {
+        // Regression for Issue #13: without port parsing, this URL was "".
+        let c = ServerConfig(alias: "nas", serverProtocol: .webdav, hostname: "192.168.31.249:5702", sharePath: "dav")
+        XCTAssertEqual(c.mountURLString, "https://192.168.31.249:5702/dav")
+    }
+
+    func testMountURLString_smbWithCustomPort_includesPort() {
+        let c = ServerConfig(alias: "nas", serverProtocol: .smb, hostname: "10.0.0.1:4445", sharePath: "media")
+        XCTAssertEqual(c.mountURLString, "smb://10.0.0.1:4445/media")
+    }
+
+    func testUrlString_webdavWithPortAndUsername_rendersBoth() {
+        var c = ServerConfig(alias: "nas", serverProtocol: .webdav, hostname: "192.168.31.249:5702", sharePath: "dav")
+        c.username = "jasine"
+        // Display URL has credentials; mount URL does not — same port handling in both.
+        XCTAssertEqual(c.urlString, "https://jasine@192.168.31.249:5702/dav")
+        XCTAssertEqual(c.mountURLString, "https://192.168.31.249:5702/dav")
+    }
+
+    func testMountURLString_bracketedIPv6WithPort_includesBothCorrectly() {
+        let c = ServerConfig(alias: "nas", serverProtocol: .smb, hostname: "[fe80::1]:4445", sharePath: "share")
+        // URLComponents emits the host in brackets when it contains colons.
+        XCTAssertEqual(c.mountURLString, "smb://[fe80::1]:4445/share")
+    }
+
+    func testIsValidMountTarget_unaffectedByHostnamePort() {
+        // Port syntax in hostname must not change share-path validation —
+        // the mount is still blocked if there's no share.
+        let empty = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "nas.local:5702", sharePath: "")
+        let full = ServerConfig(alias: "a", serverProtocol: .webdav, hostname: "nas.local:5702", sharePath: "dav")
+        XCTAssertFalse(empty.isValidMountTarget)
+        XCTAssertTrue(full.isValidMountTarget)
+    }
+
 }

@@ -39,7 +39,7 @@ struct ServerDetailView: View {
                     }
 
                     TextField("Hostname / IP", text: $config.hostname)
-                    Text("IP or hostname only — no protocol prefix or slashes. e.g. 192.168.1.50, nas.local, or a Tailscale IP like 100.101.102.103.")
+                    Text("IP or hostname only — no protocol prefix or slashes. Append :port for non-standard ports (e.g. 192.168.1.50:5702). Examples: 192.168.1.50, nas.local, 100.101.102.103.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -151,6 +151,12 @@ struct ServerDetailView: View {
             .padding()
         }
         .frame(minWidth: 300, minHeight: 400)
+        // Clear a stale Test Connection result the moment the user edits the
+        // target. Without this, "Connection Successful" from an earlier,
+        // different hostname/protocol can stay on screen and mislead the user
+        // (Issue #13).
+        .onChange(of: config.hostname) { testResult = nil }
+        .onChange(of: config.serverProtocol) { testResult = nil }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
@@ -210,7 +216,11 @@ struct ServerDetailView: View {
     private func testConnection() {
         isTestRunning = true
         testResult = nil
-        ConnectionTester.shared.checkReachability(host: config.hostname, port: config.serverProtocol.defaultPort) { result in
+        // Honor an explicit port the user put in the hostname field; otherwise
+        // fall back to the protocol default. See ServerConfig.parsedHost for
+        // why this split matters (Issue #13).
+        let port = config.parsedPort ?? config.serverProtocol.defaultPort
+        ConnectionTester.shared.checkReachability(host: config.parsedHost, port: port) { result in
             DispatchQueue.main.async {
                 isTestRunning = false
                 switch result {
@@ -218,7 +228,7 @@ struct ServerDetailView: View {
                     testResult = true
                     if config.wolMACAddress == nil {
                         DispatchQueue.global(qos: .utility).async {
-                            if let mac = WOLService.shared.resolveMAC(for: self.config.hostname) {
+                            if let mac = WOLService.shared.resolveMAC(for: self.config.parsedHost) {
                                 DispatchQueue.main.async {
                                     self.config.wolMACAddress = mac
                                 }

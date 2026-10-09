@@ -68,7 +68,7 @@ class AppState: ObservableObject {
     
     static func computeMountStatus(servers: [ServerConfig], fingerprint: NetworkFingerprint?) -> MountStatus {
         let matchingServers = servers.filter { server in
-            server.shouldAutoMount(for: fingerprint, isVPN: NetworkMonitor.shared.isVPNRouted(host: server.hostname))
+            server.shouldAutoMount(for: fingerprint, isVPN: NetworkMonitor.shared.isVPNRouted(host: server.parsedHost))
         }
 
         guard !matchingServers.isEmpty else { return .idle }

@@ -335,7 +335,14 @@ class MountingManager {
         let sharePath = "/\(cleanShare)"
         let mountName = URL(fileURLWithPath: sharePath).lastPathComponent
         let mountPoint = "/Volumes/\(mountName)"
-        let nfsSource = "\(config.hostname):\(sharePath)"
+        // Use the parsed host so a `host:port` entry doesn't produce the
+        // bogus source `host:port:/share`. NFS custom port support (via
+        // `-o port=`) would require threading the port through the
+        // privileged wrapper and is out of scope for Issue #13.
+        let nfsSource = "\(config.parsedHost):\(sharePath)"
+        if config.parsedPort != nil {
+            logger.warning("NFS mount ignores custom port in hostname for \(config.alias); mounting on default NFS port.")
+        }
 
         let mountProcess = Process()
         let errorPipe = Pipe()
