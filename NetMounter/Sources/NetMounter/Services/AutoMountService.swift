@@ -73,8 +73,10 @@ class AutoMountService: ObservableObject {
         let servers = appState.servers.filter { $0.hasEnabledAutoMountRules }
         guard !servers.isEmpty else { return }
 
-        // Resolve VPN routes on background thread to avoid blocking UI
-        let hostnames = servers.map { $0.hostname }
+        // Resolve VPN routes on background thread to avoid blocking UI.
+        // Key the map by the parsed host so a `host:port` entry resolves to a
+        // valid routing lookup (Issue #13).
+        let hostnames = servers.map { $0.parsedHost }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             var vpnResults: [String: Bool] = [:]
@@ -93,7 +95,7 @@ class AutoMountService: ObservableObject {
         for server in servers {
             guard let url = URL(string: server.urlString) else { continue }
 
-            let isVPN = vpnResults[server.hostname] ?? false
+            let isVPN = vpnResults[server.parsedHost] ?? false
 
             if server.shouldAutoMount(for: fingerprint, isVPN: isVPN) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
@@ -167,12 +169,16 @@ class AutoMountService: ObservableObject {
         
         logger.info("Auto-mount \(server.alias) attempt \(retryCount + 1)")
         
-        // Verify connectivity first
-        ConnectionTester.shared.checkReachability(host: server.hostname, port: server.serverProtocol.defaultPort) { [weak self] result in
+        // Verify connectivity first. Use the parsed host/port so a value like
+        // "nas.local:5702" in the hostname field reaches the right endpoint
+        // (Issue #13).
+        let probeHost = server.parsedHost
+        let probePort = server.parsedPort ?? server.serverProtocol.defaultPort
+        ConnectionTester.shared.checkReachability(host: probeHost, port: probePort) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(true):
-                    logger.info("\(server.hostname) reachable. Mounting...")
+                    logger.info("\(probeHost) reachable. Mounting...")
                     MountingManager.shared.mount(config: server, silent: retryCount > 0) { mountResult in
                         switch mountResult {
                         case .success(let path):
@@ -192,7 +198,7 @@ class AutoMountService: ObservableObject {
                         }
                     }
                 case .success(false), .failure:
-                    logger.debug("\(server.hostname) not reachable.")
+                    logger.debug("\(probeHost) not reachable.")
                     if retryCount == 0 && server.wolEnabled && server.wolMACAddress != nil {
                         self?.attemptWOLAndPoll(server)
                     } else {
@@ -253,11 +259,13 @@ class AutoMountService: ObservableObject {
     // MARK: - Wake-on-LAN
 
     private func learnMACIfNeeded(for server: ServerConfig) {
+        // ARP lookups need the bare host; `host:port` is not an ARP target.
+        let host = server.parsedHost
         guard server.wolMACAddress == nil,
-              !macResolutionFailed.contains(server.hostname) else { return }
+              !macResolutionFailed.contains(host) else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let mac = WOLService.shared.resolveMAC(for: server.hostname) else {
-                DispatchQueue.main.async { self?.macResolutionFailed.insert(server.hostname) }
+            guard let mac = WOLService.shared.resolveMAC(for: host) else {
+                DispatchQueue.main.async { self?.macResolutionFailed.insert(host) }
                 return
             }
             DispatchQueue.main.async {
@@ -273,7 +281,10 @@ class AutoMountService: ObservableObject {
     }
 
     private func attemptWOLAndPoll(_ server: ServerConfig) {
-        let hostname = server.hostname
+        // Key the WOL queue and poll by the bare host so entries with and
+        // without an explicit port still share pending state correctly.
+        let hostname = server.parsedHost
+        let probePort = server.parsedPort ?? server.serverProtocol.defaultPort
 
         if wolPendingServers[hostname] != nil {
             wolPendingServers[hostname]?.append(server)
@@ -298,7 +309,7 @@ class AutoMountService: ObservableObject {
                 )
                 logger.info("WOL sent for \(server.alias) (\(mac))")
                 DispatchQueue.main.async {
-                    self?.pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
+                    self?.pollReachability(hostname: hostname, port: probePort,
                                            interval: 3.0, remaining: 60.0)
                 }
             } catch {

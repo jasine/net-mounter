@@ -78,6 +78,66 @@ struct ServerConfig: Codable, Identifiable {
         sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
     }
 
+    /// `hostname` with any trailing `:port` or surrounding `[...]` stripped.
+    /// Users commonly enter `host:port` in the single hostname field — for
+    /// WebDAV on non-standard ports especially — but `URLComponents.host`
+    /// rejects strings containing `:`, which silently zeroes out the mount
+    /// URL. Splitting here lets the whole pipeline (URL construction,
+    /// reachability, WOL, VPN routing) use just the host portion while
+    /// `parsedPort` carries the port separately.
+    var parsedHost: String {
+        parsedHostAndPort.host
+    }
+
+    /// Port extracted from the `hostname` field, if the user put one there.
+    /// Returns nil for plain hostnames or malformed `:port` suffixes.
+    var parsedPort: UInt16? {
+        parsedHostAndPort.port
+    }
+
+    private var parsedHostAndPort: (host: String, port: UInt16?) {
+        let raw = hostname.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return (raw, nil) }
+
+        // Bracketed IPv6: "[::1]" or "[::1]:5702"
+        if raw.hasPrefix("[") {
+            guard let closing = raw.firstIndex(of: "]") else {
+                return (raw, nil)
+            }
+            let inside = String(raw[raw.index(after: raw.startIndex)..<closing])
+            let afterBracket = raw.index(after: closing)
+            if afterBracket < raw.endIndex, raw[afterBracket] == ":" {
+                let portStr = String(raw[raw.index(after: afterBracket)..<raw.endIndex])
+                if let port = UInt16(portStr), port > 0 {
+                    return (inside, port)
+                }
+                // Malformed port after `]` — treat whole thing as host so the
+                // user sees exactly what they typed in the resulting error.
+                return (raw, nil)
+            }
+            return (inside, nil)
+        }
+
+        // Multiple colons without brackets → unbracketed IPv6, no port.
+        // (Standard URL syntax requires brackets to combine IPv6 + port.)
+        let colonCount = raw.filter { $0 == ":" }.count
+        if colonCount >= 2 {
+            return (raw, nil)
+        }
+
+        // Single colon → "host:port".
+        if colonCount == 1, let colon = raw.firstIndex(of: ":") {
+            let host = String(raw[raw.startIndex..<colon])
+            let portStr = String(raw[raw.index(after: colon)..<raw.endIndex])
+            if !host.isEmpty, let port = UInt16(portStr), port > 0 {
+                return (host, port)
+            }
+            return (raw, nil)
+        }
+
+        return (raw, nil)
+    }
+
     /// A mount needs a concrete share/export path — `smb://host` with no share
     /// (or NFS with no export) is not a mountable target and must be rejected
     /// before calling into NetFS, which otherwise hangs on such input.
@@ -113,7 +173,10 @@ struct ServerConfig: Codable, Identifiable {
     var urlString: String {
         var components = URLComponents()
         components.scheme = serverProtocol.scheme
-        components.host = hostname
+        components.host = hostForURLComponents(parsedHost)
+        if let port = parsedPort {
+            components.port = Int(port)
+        }
 
         let cleanPath = normalizedSharePath
 
@@ -141,11 +204,21 @@ struct ServerConfig: Codable, Identifiable {
     var mountURLString: String {
         var components = URLComponents()
         components.scheme = serverProtocol.scheme
-        components.host = hostname
+        components.host = hostForURLComponents(parsedHost)
+        if let port = parsedPort {
+            components.port = Int(port)
+        }
         let cleanPath = normalizedSharePath
         if !cleanPath.isEmpty {
             components.path = "/\(cleanPath)"
         }
         return components.string ?? ""
+    }
+
+    /// `URLComponents.host` rejects IPv6 unless it's bracketed; `parsedHost`
+    /// strips brackets so other call sites (ARP, VPN routing) get the raw
+    /// address. Re-wrap here when writing back into URLComponents.
+    private func hostForURLComponents(_ host: String) -> String {
+        host.contains(":") ? "[\(host)]" : host
     }
 }
