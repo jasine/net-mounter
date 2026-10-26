@@ -24,3 +24,54 @@
 "Added" = "Added";
 "Done" = "Done";
 "NFS uses host-based access control. No credentials needed." = "NFS uses host-based access control. No credentials needed.";
+
+/* Saving, operation feedback, and automatic mounting */
+"Enter a name for this server." = "Enter a name for this server.";
+"Enter a hostname or IP only, without a protocol prefix, slashes, or spaces." = "Enter a hostname or IP only, without a protocol prefix, slashes, or spaces.";
+"Enter a share or export path." = "Enter a share or export path.";
+"Not mounted" = "Not mounted";
+"Waiting for network" = "Waiting for network";
+"Connecting…" = "Connecting…";
+"Unmounting…" = "Unmounting…";
+"Mounted" = "Mounted";
+"Mount failed" = "Mount failed";
+"Unmount failed — still mounted" = "Unmount failed — still mounted";
+"Could not save the password to Keychain. Your previous configuration and password are unchanged." = "Could not save the password to Keychain. Your previous configuration and password are unchanged.";
+"The unused replacement password could not be removed from Keychain." = "The unused replacement password could not be removed from Keychain.";
+"A password is saved in Keychain. Leave this field blank to keep it." = "A password is saved in Keychain. Leave this field blank to keep it.";
+"Remove saved password when saving" = "Remove saved password when saving";
+"Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again." = "Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again.";
+"Check server reachability" = "Check server reachability";
+"Server port is reachable. Account and share access have not been verified." = "Server port is reachable. Account and share access have not been verified.";
+"Server port is unreachable. Check the address, network, and server service." = "Server port is unreachable. Check the address, network, and server service.";
+"Enable to remember the current network. No automatic mount occurs until you save." = "Enable to remember the current network. No automatic mount occurs until you save.";
+"Automatic mounting uses saved networks or a VPN route. Turning it off keeps your saved networks and stops future attempts; existing mounts stay connected." = "Automatic mounting uses saved networks or a VPN route. Turning it off keeps your saved networks and stops future attempts; existing mounts stay connected.";
+"Could not save" = "Could not save";
+"Configuration saved" = "Configuration saved";
+"The configuration is saved, but the old password could not be removed from Keychain." = "The configuration is saved, but the old password could not be removed from Keychain.";
+"NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize." = "NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize.";
+"Could not install the NFS helper. Your configuration was not saved. Try saving again." = "Could not install the NFS helper. Your configuration was not saved. Try saving again.";
+"Configuration update" = "Configuration update";
+"The server was removed, but its password could not be removed from Keychain." = "The server was removed, but its password could not be removed from Keychain.";
+"Retry" = "Retry";
+"Edit" = "Edit";
+"Delete" = "Delete";
+"Mount" = "Mount";
+"Unmount" = "Unmount";
+"Open in Finder" = "Open in Finder";
+"Server did not become reachable after wake-up." = "Server did not become reachable after wake-up.";
+"Saving…" = "Saving…";
+"An operation is in progress. Wait for it to finish, then try again." = "An operation is in progress. Wait for it to finish, then try again.";
+
+// Mount request diagnostics
+"Mount timed out while waiting for macOS or the server. Automatic retries are paused; try mounting again manually." = "Mount timed out while waiting for macOS or the server. Automatic retries are paused; try mounting again manually.";
+"The saved password could not be read from Keychain. Allow access, unlock Keychain, or save the password again." = "The saved password could not be read from Keychain. Allow access, unlock Keychain, or save the password again.";
+"The previous mount request is still pending in macOS. Automatic retries are paused; the macOS network service may need to be restarted." = "The previous mount request is still pending in macOS. Automatic retries are paused; the macOS network service may need to be restarted.";
+
+// Diagnostics
+"Diagnostics" = "Diagnostics";
+"Share diagnostic data" = "Share diagnostic data";
+"About diagnostic data" = "About diagnostic data";
+"Enabled by default; you can turn this off. Sends crash reports, error codes, app/OS versions and operation timing to Sentry in the US. Passwords, usernames, server addresses, share paths and MAC addresses are excluded. Sentry processes the connection IP address; IP and inferred location are scrubbed on the server. Turning this off stops new collection and attempts to delete the local diagnostic cache. Reports already queued may still be delivered; reports already sent cannot be recalled." = "Enabled by default; you can turn this off. Sends crash reports, error codes, app/OS versions and operation timing to Sentry in the US. Passwords, usernames, server addresses, share paths and MAC addresses are excluded. Sentry processes the connection IP address; IP and inferred location are scrubbed on the server. Turning this off stops new collection and attempts to delete the local diagnostic cache. Reports already queued may still be delivered; reports already sent cannot be recalled.";
+"Send diagnostic test" = "Send diagnostic test";
+"Diagnostic test queued. Delivery depends on network availability." = "Diagnostic test queued. Delivery depends on network availability.";

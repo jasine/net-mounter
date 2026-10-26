@@ -62,4 +62,27 @@ final class MountSnapshotTests: XCTestCase {
         )
         XCTAssertFalse(snapshot.matches(config))
     }
+
+    func testMatchesServerConfig_differentProtocol() {
+        let snapshot = MountSnapshot(
+            serverID: nil,
+            volumePath: "/Volumes/media",
+            remountURL: URL(string: "afp://192.168.1.2/media")!
+        )
+        let config = ServerConfig(alias: "media", serverProtocol: .smb, hostname: "192.168.1.2", sharePath: "media")
+        XCTAssertFalse(snapshot.matches(config))
+    }
+
+    func testMatchesServerConfig_fullNFSExportPath() {
+        let snapshot = MountSnapshot(
+            serverID: nil,
+            volumePath: "/Volumes/docker-1",
+            remountURL: URL(string: "nfs://192.168.1.2/volume1/docker")!
+        )
+        var config = ServerConfig(alias: "docker", serverProtocol: .nfs, hostname: "192.168.1.2", sharePath: "/volume1/docker")
+        XCTAssertTrue(snapshot.matches(config))
+        config.sharePath = "/volume2/docker"
+        XCTAssertFalse(snapshot.matches(config))
+    }
+
 }

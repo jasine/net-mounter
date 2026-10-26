@@ -1,6 +1,9 @@
 import Cocoa
 import SwiftUI
 import Combine
+#if DEBUG
+import Sentry
+#endif
 
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverDelegate {
     var statusItem: NSStatusItem!
@@ -16,6 +19,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
     var preventPopoverClose = false
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // Isolated end-to-end check: no configuration, Keychain, mounts or scans are touched.
+        if ProcessInfo.processInfo.environment["NETMOUNTER_SENTRY_VERIFY"] == "1" {
+            let diagnostics = DiagnosticsService(
+                cacheURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            )
+            diagnostics.setEnabled(true, persist: false)
+            diagnostics.sendTestEvent()
+            DispatchQueue.global(qos: .utility).async {
+                SentrySDK.flush(timeout: 15)
+                diagnostics.setEnabled(false, persist: false)
+                DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
+            }
+            return
+        }
+        #endif
+        DiagnosticsService.shared.startIfEnabled()
+        DiagnosticsService.shared.breadcrumb(.launch)
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:replyEvent:)),
@@ -34,10 +55,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
 
         NotificationService.shared.setup()
         NotificationService.shared.onRetry = { [weak self] serverID in
-            guard let self = self,
-                  self.appState.servers.contains(where: { $0.id == serverID }),
-                  let fingerprint = NetworkMonitor.shared.currentFingerprint else { return }
-            self.autoMountService.evaluateAutoMount(for: fingerprint)
+            DispatchQueue.main.async {
+                self?.autoMountService.retryMount(serverID)
+            }
         }
 
         // Setup Popover
@@ -97,7 +117,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
         }
     }
     
+    func applicationWillTerminate(_ notification: Notification) {
+        DiagnosticsService.shared.breadcrumb(.quit)
+    }
+
     @objc func togglePopover(_ sender: AnyObject?) {
+        DiagnosticsService.shared.breadcrumb(.popover)
         if let button = statusItem.button {
             if popover.isShown {
                 popover.performClose(sender)
@@ -165,7 +190,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, NSPopoverD
                 hostname: host,
                 sharePath: share
             )
-            appState.addServer(config)
+            if let validation = config.validationMessage {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = String(localized: "Could not save", bundle: .module)
+                errorAlert.informativeText = validation
+                errorAlert.runModal()
+            } else if case .failure(let error) = appState.addServer(config) {
+                let errorAlert = NSAlert()
+                errorAlert.messageText = String(localized: "Could not save", bundle: .module)
+                errorAlert.informativeText = error.localizedDescription
+                errorAlert.runModal()
+            }
         }
     }
 

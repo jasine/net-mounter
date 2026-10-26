@@ -53,7 +53,14 @@ class WOLService {
     func wake(macAddress: String,
               broadcastAddress: String = "255.255.255.255",
               port: UInt16 = 9) throws {
-        let packet = try Self.buildMagicPacket(macAddress: macAddress)
+        let diagnostic = DiagnosticsService.shared.begin(.wol)
+        let packet: Data
+        do {
+            packet = try Self.buildMagicPacket(macAddress: macAddress)
+        } catch {
+            diagnostic.finish(error: error)
+            throw error
+        }
 
         let host = NWEndpoint.Host(broadcastAddress)
         let nwPort = NWEndpoint.Port(integerLiteral: port)
@@ -89,11 +96,15 @@ class WOLService {
         let result = semaphore.wait(timeout: .now() + 5.0)
         if result == .timedOut {
             connection.cancel()
-            throw WOLError.sendFailed("Timeout sending magic packet")
+            let error = WOLError.sendFailed("Timeout sending magic packet")
+            diagnostic.finish(error: error)
+            throw error
         }
         if let error = sendError {
+            diagnostic.finish(error: error)
             throw WOLError.sendFailed(error.localizedDescription)
         }
+        diagnostic.finish()
 
         logger.info("WOL magic packet sent to \(macAddress) via \(broadcastAddress):\(port)")
     }

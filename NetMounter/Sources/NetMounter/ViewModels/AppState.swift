@@ -27,45 +27,63 @@ enum MountStatus {
 class AppState: ObservableObject {
     @Published var servers: [ServerConfig] = []
     @Published var isUIVisible: Bool = false
+    @Published var isSavingServer = false
+    @Published var serverOperations: [UUID: ServerOperation] = [:]
     
     private let configURL: URL
     
-    init() {
-        // Setup config persistence path
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appDir = appSupport.appendingPathComponent("NetMounter")
-        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-        configURL = appDir.appendingPathComponent("config.json")
-        
+    init(configURL: URL? = nil) {
+        if let configURL {
+            self.configURL = configURL
+        } else {
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let appDir = appSupport.appendingPathComponent("NetMounter")
+            try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+            self.configURL = appDir.appendingPathComponent("config.json")
+        }
         loadConfig()
     }
-    
-    func addServer(_ config: ServerConfig) {
-        servers.append(config)
-        saveConfig()
+
+    @discardableResult
+    func addServer(_ config: ServerConfig) -> Result<Void, Error> {
+        saveConfig(servers + [config])
     }
-    
-    func removeServer(id: UUID) {
-        servers.removeAll { $0.id == id }
-        saveConfig()
+
+    @discardableResult
+    func removeServer(id: UUID) -> Result<Void, Error> {
+        let result = saveConfig(servers.filter { $0.id != id })
+        if case .success = result { serverOperations.removeValue(forKey: id) }
+        return result
     }
-    
-    func updateServer(_ config: ServerConfig) {
-        if let index = servers.firstIndex(where: { $0.id == config.id }) {
-            servers[index] = config
-            saveConfig()
+
+    @discardableResult
+    func updateServer(_ config: ServerConfig) -> Result<Void, Error> {
+        guard let index = servers.firstIndex(where: { $0.id == config.id }) else {
+            return .failure(CocoaError(.fileNoSuchFile))
         }
+        let targetChanged = servers[index].mountURLString != config.mountURLString
+        var updated = servers
+        updated[index] = config
+        let result = saveConfig(updated)
+        if case .success = result, targetChanged { serverOperations[config.id] = .idle }
+        return result
     }
-    
-    private func saveConfig() {
+
+    private func saveConfig(_ candidate: [ServerConfig]) -> Result<Void, Error> {
+        let diagnostic = DiagnosticsService.shared.begin(.configSave)
         do {
-            let data = try JSONEncoder().encode(servers)
-            try data.write(to: configURL)
+            let data = try JSONEncoder().encode(candidate)
+            try data.write(to: configURL, options: .atomic)
+            servers = candidate
+            diagnostic.finish()
+            return .success(())
         } catch {
+            diagnostic.finish(error: error)
             logger.error("Failed to save config: \(error.localizedDescription)")
+            return .failure(error)
         }
     }
-    
+
     static func computeMountStatus(servers: [ServerConfig], fingerprint: NetworkFingerprint?) -> MountStatus {
         let matchingServers = servers.filter { server in
             server.shouldAutoMount(for: fingerprint, isVPN: NetworkMonitor.shared.isVPNRouted(host: server.hostname))
@@ -82,10 +100,17 @@ class AppState: ObservableObject {
     }
 
     private func loadConfig() {
+        let diagnostic = DiagnosticsService.shared.begin(.configLoad)
         do {
             let data = try Data(contentsOf: configURL)
             servers = try JSONDecoder().decode([ServerConfig].self, from: data)
+            diagnostic.finish()
         } catch {
+            let nsError = error as NSError
+            // Missing config is normal on the first launch. Corruption/permission errors are not.
+            let missing = (nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError)
+                || (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOENT))
+            diagnostic.finish(error: missing ? nil : error)
             logger.info("No existing config or failed to load: \(error.localizedDescription)")
         }
     }

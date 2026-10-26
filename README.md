@@ -146,8 +146,9 @@ netmounter://add?host=192.168.1.100&proto=smb&share=shared&alias=NAS
 ## 🔒 Security
 
 - Passwords stored securely using macOS Keychain
-- No sensitive information written to config files
-- Runs locally, no network tracking
+- Passwords are not written to configuration files; server addresses and settings stay in local JSON.
+- Diagnostic collection is **on by default** to help improve reliability. Turn off **Settings → Diagnostics → Share diagnostic data** to stop collection.
+- Sanitized error/crash reports and sampled operation timings go to Sentry (US); passwords, server addresses, share paths and raw logs are not forwarded. Sentry processes the connection IP for transport; details and limitations are documented in [SENTRY.md](SENTRY.md).
 
 ## 🛠️ Development
 

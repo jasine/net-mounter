@@ -62,6 +62,7 @@ class NetworkDiscoveryService: ObservableObject {
     private var subnetPendingProbes: Int = 0
 
     func startScan() {
+        DiagnosticsService.shared.breadcrumb(.discovery)
         logger.info("Starting network discovery scan")
         DispatchQueue.main.async {
             self.servers = []
@@ -114,6 +115,7 @@ class NetworkDiscoveryService: ObservableObject {
     /// Complements Bonjour discovery, which only finds hosts that advertise
     /// themselves via mDNS (e.g. Windows shares and manual hosts stay hidden).
     func startSubnetScan() {
+        DiagnosticsService.shared.breadcrumb(.subnetScan)
         guard !isSubnetScanning else { return }
 
         guard let prefix = Self.localSubnetPrefix() else {
@@ -261,6 +263,7 @@ class NetworkDiscoveryService: ObservableObject {
             case .ready:
                 logger.debug("Browser ready for \(protocolType.displayName)")
             case .failed(let error):
+                DiagnosticsService.shared.begin(.discoveryBrowser, protocolType: protocolType).finish(error: error)
                 logger.error("Browser failed for \(protocolType.displayName): \(error.localizedDescription)")
             case .cancelled:
                 break
@@ -438,6 +441,7 @@ class NetworkDiscoveryService: ObservableObject {
     }
 
     private func enumerateSMBShares(host: String, serverID: UUID) -> [DiscoveredShare] {
+        let diagnostic = DiagnosticsService.shared.begin(.enumerateShares, protocolType: .smb)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/smbutil")
         process.arguments = ["view", "-G", "-N", "//\(host)"]
@@ -450,6 +454,7 @@ class NetworkDiscoveryService: ObservableObject {
         do {
             try process.run()
         } catch {
+            diagnostic.finish(error: error)
             NSLog("[Discovery] smbutil launch failed: %@", error.localizedDescription)
             return []
         }
@@ -462,6 +467,7 @@ class NetworkDiscoveryService: ObservableObject {
         let output = String(data: outputData, encoding: .utf8) ?? ""
         let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
 
+        diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
         NSLog("[Discovery] smbutil exit=%d host=%@\nSTDOUT:\n%@\nSTDERR:\n%@", process.terminationStatus, host, output, errorOutput)
 
         // Parse smbutil output. Typical format:
@@ -500,6 +506,7 @@ class NetworkDiscoveryService: ObservableObject {
     }
 
     private func enumerateNFSExports(host: String, serverID: UUID) -> [DiscoveredShare] {
+        let diagnostic = DiagnosticsService.shared.begin(.enumerateShares, protocolType: .nfs)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/showmount")
         process.arguments = ["-e", host]
@@ -512,6 +519,7 @@ class NetworkDiscoveryService: ObservableObject {
         do {
             try process.run()
         } catch {
+            diagnostic.finish(error: error)
             NSLog("[Discovery] showmount launch failed: %@", error.localizedDescription)
             return []
         }
@@ -523,6 +531,7 @@ class NetworkDiscoveryService: ObservableObject {
         let output = String(data: outputData, encoding: .utf8) ?? ""
         let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
 
+        diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
         NSLog("[Discovery] showmount exit=%d host=%@\nSTDOUT:\n%@\nSTDERR:\n%@", process.terminationStatus, host, output, errorOutput)
 
         // Parse showmount -e output. Typical format:

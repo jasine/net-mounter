@@ -1,10 +1,12 @@
 #!/bin/bash
+set -euo pipefail
 
 # Configuration
 APP_NAME="NetMounter"
 VERSION="${1:-1.3.0}"
 BUILD_DIR=".build/apple/Products/Release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
+RESOURCE_BUNDLE_PATH="$BUILD_DIR/${APP_NAME}_${APP_NAME}.bundle"
 OUTPUT_DIR="."
 APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
 
@@ -12,6 +14,13 @@ APP_BUNDLE="$OUTPUT_DIR/$APP_NAME.app"
 if [ ! -f "$BINARY_PATH" ]; then
     echo "Release binary not found. Building..."
     swift build -c release --arch arm64 --arch x86_64
+fi
+
+# SwiftPM resources must travel with the executable; Bundle.module traps without them.
+# Check before replacing an existing app.
+if [ ! -d "$RESOURCE_BUNDLE_PATH" ]; then
+    echo "Resource bundle not found: $RESOURCE_BUNDLE_PATH. Rebuild the release before packaging." >&2
+    exit 1
 fi
 
 # Create App Bundle Structure
@@ -22,6 +31,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy Binary
 cp "$BINARY_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+# Remove build-path debug maps only from the distributed copy. Preserve UUIDs and the original dSYM.
+xcrun strip -S "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+cp -R "$RESOURCE_BUNDLE_PATH" "$APP_BUNDLE/Contents/Resources/"
 
 # Process Icon
 if [ -f "app_icon.png" ]; then

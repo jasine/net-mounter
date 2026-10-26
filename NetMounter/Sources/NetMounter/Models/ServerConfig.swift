@@ -75,14 +75,41 @@ struct ServerConfig: Codable, Identifiable {
     var wolPort: UInt16 = 9
 
     var normalizedSharePath: String {
-        sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\").union(.whitespacesAndNewlines))
     }
 
     /// A mount needs a concrete share/export path — `smb://host` with no share
     /// (or NFS with no export) is not a mountable target and must be rejected
     /// before calling into NetFS, which otherwise hangs on such input.
     var isValidMountTarget: Bool {
-        !normalizedSharePath.trimmingCharacters(in: .whitespaces).isEmpty
+        !normalizedSharePath.isEmpty && (serverProtocol != .nfs || !normalizedSharePath.split(separator: "/").contains { $0 == "." || $0 == ".." })
+    }
+
+    var isValidHostname: Bool {
+        !hostname.isEmpty && !hostname.hasPrefix("-") && hostname.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+            && !hostname.contains("/") && !hostname.contains("\\") && !hostname.contains("@")
+            && URL(string: mountURLString)?.host != nil
+    }
+
+    var validationMessage: String? {
+        if alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return String(localized: "Enter a name for this server.", bundle: .module)
+        }
+        if !isValidHostname {
+            return String(localized: "Enter a hostname or IP only, without a protocol prefix, slashes, or spaces.", bundle: .module)
+        }
+        if !isValidMountTarget {
+            return String(localized: "Enter a share or export path.", bundle: .module)
+        }
+        return nil
+    }
+
+    mutating func setAutoMountEnabled(_ enabled: Bool, fingerprint: NetworkFingerprint?) {
+        if enabled && autoMountRules.isEmpty, let fingerprint {
+            autoMountRules.append(AutoMountRule(fingerprint: fingerprint))
+        } else {
+            for index in autoMountRules.indices { autoMountRules[index].enabled = enabled }
+        }
     }
 
     var hasEnabledAutoMountRules: Bool {
@@ -135,7 +162,7 @@ struct ServerConfig: Codable, Identifiable {
     }
 
     /// URL for mounting — deliberately WITHOUT credentials in the URL.
-    /// Credentials are passed as separate arguments to NetFSMountURLSync;
+    /// Credentials are passed as separate arguments to NetFSMountURLAsync;
     /// embedding the username in the URL *and* passing it as an argument makes
     /// the mount hang. Used only for mounting, not for display (see urlString).
     var mountURLString: String {

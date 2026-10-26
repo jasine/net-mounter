@@ -24,3 +24,54 @@
 "Added" = "已添加";
 "Done" = "完成";
 "NFS uses host-based access control. No credentials needed." = "NFS 使用基于主机的访问控制，无需输入凭据。";
+
+/* Saving, operation feedback, and automatic mounting */
+"Enter a name for this server." = "请输入服务器名称。";
+"Enter a hostname or IP only, without a protocol prefix, slashes, or spaces." = "请输入主机名或 IP，不要包含协议前缀、斜杠或空格。";
+"Enter a share or export path." = "请输入共享目录或导出路径。";
+"Not mounted" = "未挂载";
+"Waiting for network" = "等待网络";
+"Connecting…" = "正在连接…";
+"Unmounting…" = "正在卸载…";
+"Mounted" = "已挂载";
+"Mount failed" = "挂载失败";
+"Unmount failed — still mounted" = "卸载失败，仍处于挂载状态";
+"Could not save the password to Keychain. Your previous configuration and password are unchanged." = "无法将密码保存到钥匙串。原有配置和密码未改变。";
+"The unused replacement password could not be removed from Keychain." = "未使用的新密码未能从钥匙串中清除。";
+"A password is saved in Keychain. Leave this field blank to keep it." = "钥匙串中已有密码，留空即可保留。";
+"Remove saved password when saving" = "保存时移除已有密码";
+"Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again." = "保存时将请求一次管理员授权，安装持久的 NFS 挂载助手。此后挂载无需重复输入管理员密码。";
+"Check server reachability" = "检查服务器可达性";
+"Server port is reachable. Account and share access have not been verified." = "服务器端口可达，尚未验证账号和共享目录访问权限。";
+"Server port is unreachable. Check the address, network, and server service." = "服务器端口不可达，请检查地址、网络和服务器服务。";
+"Enable to remember the current network. No automatic mount occurs until you save." = "开启后记住当前网络，保存前不会自动挂载。";
+"Automatic mounting uses saved networks or a VPN route. Turning it off keeps your saved networks and stops future attempts; existing mounts stay connected." = "在已保存的网络或 VPN 路由下自动挂载。关闭后保留网络规则并停止后续尝试，已挂载的共享保持连接。";
+"Could not save" = "保存失败";
+"Configuration saved" = "配置已保存";
+"The configuration is saved, but the old password could not be removed from Keychain." = "配置已保存，但旧密码未能从钥匙串中移除。";
+"NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize." = "已取消 NFS 初始化授权，配置未保存。再次点击“保存”可重新授权。";
+"Could not install the NFS helper. Your configuration was not saved. Try saving again." = "无法安装 NFS 挂载助手，配置未保存。请再次尝试保存。";
+"Configuration update" = "配置更新";
+"The server was removed, but its password could not be removed from Keychain." = "服务器配置已移除，但密码未能从钥匙串中移除。";
+"Retry" = "重试";
+"Edit" = "编辑";
+"Delete" = "删除";
+"Mount" = "挂载";
+"Unmount" = "卸载";
+"Open in Finder" = "在访达中打开";
+"Server did not become reachable after wake-up." = "唤醒后服务器仍不可达。";
+"Saving…" = "正在保存…";
+"An operation is in progress. Wait for it to finish, then try again." = "操作正在进行，请等待完成后再试。";
+
+// Mount request diagnostics
+"Mount timed out while waiting for macOS or the server. Automatic retries are paused; try mounting again manually." = "等待 macOS 或服务器响应时挂载超时。已暂停自动重试，请手动重试挂载。";
+"The saved password could not be read from Keychain. Allow access, unlock Keychain, or save the password again." = "无法从钥匙串读取已保存的密码。请允许访问、解锁钥匙串，或重新保存密码。";
+"The previous mount request is still pending in macOS. Automatic retries are paused; the macOS network service may need to be restarted." = "上一次挂载请求仍在 macOS 中等待。已暂停自动重试，可能需要重启 macOS 网络认证服务。";
+
+// Diagnostics
+"Diagnostics" = "诊断";
+"Share diagnostic data" = "共享诊断数据";
+"About diagnostic data" = "关于诊断数据";
+"Enabled by default; you can turn this off. Sends crash reports, error codes, app/OS versions and operation timing to Sentry in the US. Passwords, usernames, server addresses, share paths and MAC addresses are excluded. Sentry processes the connection IP address; IP and inferred location are scrubbed on the server. Turning this off stops new collection and attempts to delete the local diagnostic cache. Reports already queued may still be delivered; reports already sent cannot be recalled." = "默认开启，可随时关闭：向位于美国的 Sentry 发送崩溃报告、错误代码、应用和系统版本及操作耗时。不含密码、用户名、服务器地址、共享路径或 MAC 地址。Sentry 会处理连接 IP，IP 和推导的位置在服务端清洗。关闭后停止新采集，并尝试删除本地诊断缓存；已排队的报告仍可能送达，已发送的报告无法撤回。";
+"Send diagnostic test" = "发送诊断测试";
+"Diagnostic test queued. Delivery depends on network availability." = "诊断测试已进入发送队列，是否送达取决于网络状况。";

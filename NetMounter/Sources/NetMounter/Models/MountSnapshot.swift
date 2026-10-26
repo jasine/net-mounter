@@ -6,12 +6,20 @@ struct MountSnapshot {
     let remountURL: URL
 
     func matches(_ config: ServerConfig) -> Bool {
-        guard let snapshotHost = remountURL.host?.lowercased(),
-              let snapshotShare = remountURL.pathComponents.last else {
+        guard let url = URL(string: config.mountURLString) else { return false }
+        return matches(url)
+    }
+
+    func matches(_ url: URL) -> Bool {
+        guard let sourceScheme = remountURL.scheme?.lowercased(),
+              let sourceHost = remountURL.host?.lowercased(),
+              let targetScheme = url.scheme?.lowercased(),
+              let targetHost = url.host?.lowercased() else {
             return false
         }
-        let configHost = config.hostname.lowercased()
-        let configShare = config.normalizedSharePath
-        return snapshotHost == configHost && snapshotShare == configShare
+        let sourcePath = remountURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let targetPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return !targetPath.isEmpty && sourceScheme == targetScheme
+            && sourceHost == targetHost && sourcePath == targetPath
     }
 }

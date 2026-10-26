@@ -17,6 +17,7 @@ struct ServerListView: View {
     @State private var showingAddSheet = false
     @State private var showingSettings = false
     @State private var showingDiscovery = false
+    @State private var configurationError: String?
     @State private var editingServer: ServerConfig?
     @State private var scrollContentHeight: CGFloat = 0
     private let maxScrollHeight: CGFloat = 600
@@ -85,14 +86,13 @@ struct ServerListView: View {
                             ServerRow(server: server, onEdit: {
                                 editingServer = server
                             }, onDelete: {
-                                if let keyId = server.keychainItemId {
-                                    KeychainManager.shared.delete(account: keyId)
-                                }
-                                appState.removeServer(id: server.id)
+                                deleteServer(server)
                             }, onUpdatePins: { pins in
-                                var updated = server
+                                guard var updated = appState.servers.first(where: { $0.id == server.id }) else { return }
                                 updated.pinnedFolders = pins
-                                appState.updateServer(updated)
+                                if case .failure(let error) = appState.updateServer(updated) {
+                                    configurationError = error.localizedDescription
+                                }
                             })
                         }
                     }
@@ -126,9 +126,36 @@ struct ServerListView: View {
         .sheet(item: $editingServer) { server in
             ServerDetailView(config: server)
         }
+        .alert(String(localized: "Configuration update", bundle: .module), isPresented: Binding(
+            get: { configurationError != nil }, set: { if !$0 { configurationError = nil } }
+        )) {
+            Button("OK", role: .cancel) { configurationError = nil }
+        } message: { Text(configurationError ?? "") }
         // Ensure the hosting window (if any) allows this vibrancy
         .background(Color.clear)
     }
+
+    private func deleteServer(_ server: ServerConfig) {
+        guard !appState.isSavingServer, !(appState.serverOperations[server.id]?.isBusy ?? false) else {
+            configurationError = String(localized: "An operation is in progress. Wait for it to finish, then try again.", bundle: .module)
+            return
+        }
+        switch appState.removeServer(id: server.id) {
+        case .failure(let error):
+            configurationError = error.localizedDescription
+        case .success:
+            guard let keyID = server.keychainItemId else { return }
+            appState.isSavingServer = true
+            Task { @MainActor in
+                defer { appState.isSavingServer = false }
+                let deleted = await Task.detached { KeychainManager.shared.delete(account: keyID) }.value
+                if !deleted {
+                    configurationError = String(localized: "The server was removed, but its password could not be removed from Keychain.", bundle: .module)
+                }
+            }
+        }
+    }
+
 }
 
 struct ServerRow: View {
@@ -136,9 +163,11 @@ struct ServerRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onUpdatePins: ([PinnedFolder]) -> Void
-    @State private var mountStatus: String = "Idle"
-    @State private var isMounted = false
-    @State private var currentMountPath: String?
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var operation: ServerOperation { appState.serverOperations[server.id] ?? .idle }
+    private var isMounted: Bool { operation.isMounted }
+    private var currentMountPath: String? { operation.mountPath }
     @State private var animating = false
     @State private var showDeleteConfirm = false
     @State private var showCopied = false
@@ -160,13 +189,13 @@ struct ServerRow: View {
                 Image(systemName: "server.rack")
                     .font(.system(size: 20))
                     .foregroundColor(statusColor)
-                    .opacity(isConnecting ? 0.5 : 1.0)
-                    .scaleEffect(animating && isConnecting ? 1.1 : 1.0)
-                    .animation(animating && isConnecting ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isConnecting)
+                    .opacity(operation.isBusy ? 0.5 : 1.0)
+                    .scaleEffect(animating && operation.isBusy && !reduceMotion ? 1.1 : 1.0)
+                    .animation(animating && operation.isBusy && !reduceMotion ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : nil, value: operation.isBusy)
                     .onAppear { animating = true }
                     .onDisappear { animating = false }
             }
-            .help(mountStatus) // Tooltip for detailed status
+            .help(operation.summary) // Tooltip for detailed status
             
             // Content Column
             VStack(alignment: .leading, spacing: 6) {
@@ -189,6 +218,8 @@ struct ServerRow: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(operation.isBusy || appState.isSavingServer)
+                        .accessibilityLabel(Text(isMounted ? "Unmount" : "Mount", bundle: .module))
                         .help(isMounted ? "Unmount" : "Mount")
                         
                         Button(action: openFolder) {
@@ -200,7 +231,8 @@ struct ServerRow: View {
                                 .opacity(isMounted ? 1.0 : 0.3)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!isMounted)
+                        .disabled(!isMounted || operation.isBusy)
+                        .accessibilityLabel(Text("Open in Finder", bundle: .module))
                         .help("Open in Finder")
                         
                         Button {
@@ -230,6 +262,8 @@ struct ServerRow: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(operation.isBusy || appState.isSavingServer)
+                        .accessibilityLabel(Text("Edit", bundle: .module))
                         .help("Edit")
 
                         Button(action: { showDeleteConfirm = true }) {
@@ -240,6 +274,8 @@ struct ServerRow: View {
                                 .clipShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(operation.isBusy || appState.isSavingServer)
+                        .accessibilityLabel(Text("Delete", bundle: .module))
                         .help("Delete")
                     }
                 }
@@ -251,6 +287,24 @@ struct ServerRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(server.urlString)
+
+                HStack(spacing: 6) {
+                    if operation.isBusy { ProgressView().controlSize(.mini) }
+                    Text(operation.summary).font(.caption).foregroundColor(statusColor)
+                }
+                if let message = operation.errorMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    HStack {
+                        Button(action: toggleMount) { Text("Retry", bundle: .module) }
+                        Button(action: onEdit) { Text("Edit", bundle: .module) }
+                    }
+                    .font(.caption)
+                    .disabled(operation.isBusy || appState.isSavingServer)
+                }
 
                 if !server.pinnedFolders.isEmpty || isMounted {
                     Divider()
@@ -265,6 +319,7 @@ struct ServerRow: View {
                                     .cornerRadius(8)
                             }
                             .buttonStyle(.plain)
+                           .disabled(operation.isBusy)
                             .help(pin.subpath)
                             .contextMenu {
                                 Button(role: .destructive) {
@@ -287,6 +342,7 @@ struct ServerRow: View {
                                     .cornerRadius(8)
                             }
                             .buttonStyle(.plain)
+                           .disabled(operation.isBusy || appState.isSavingServer)
                             .help("Pin a subfolder")
                         }
                     }
@@ -313,7 +369,7 @@ struct ServerRow: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: showCopied)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: showCopied)
         )
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
         .contentShape(Rectangle())
@@ -339,58 +395,38 @@ struct ServerRow: View {
         }
     }
     
-    // Helper for Status Color
     private var statusColor: Color {
-        if isMounted {
-            return .green
-        } else if mountStatus.contains("Waiting") || mountStatus.contains("Checking") || mountStatus.contains("Reconnecting") || mountStatus.contains("Connecting") {
-            return .orange
-        } else if mountStatus != "Idle" {
-            return .red
-        } else {
-            return .secondary
-        }
+        if operation.errorMessage != nil { return .red }
+        if operation.isBusy { return .orange }
+        if isMounted { return .green }
+        return .secondary
     }
-    
-    private var isConnecting: Bool {
-        return mountStatus.contains("Connecting") || mountStatus.contains("Checking") || mountStatus.contains("Reconnecting")
-    }
-    
-    // Logic remains identical, just copy pasting methods for completeness
-    
+
     private func handleNetworkChange(_ fingerprint: NetworkFingerprint?) {
-        if fingerprint == nil {
-            isMounted = false
-            mountStatus = "Waiting for Network..."
-        } else {
-            mountStatus = "Network changed, checking..."
-             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                 checkMountStatus()
-             }
-        }
+        checkMountStatus()
     }
-    
+
     private func checkMountStatus() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            guard let url = URL(string: server.urlString) else { return }
-            if let path = MountingManager.shared.findExistingMountPath(for: url) {
-                DispatchQueue.main.async {
-                    isMounted = true
-                    currentMountPath = path
-                    mountStatus = "Mounted at: \(path)"
-                }
-            } else {
-                DispatchQueue.main.async {
-                    isMounted = false
-                    currentMountPath = nil
-                    mountStatus = "Idle"
-                }
+        guard let url = URL(string: server.urlString) else { return }
+        let expected = operation
+        let state = appState
+        DispatchQueue.global(qos: .utility).async {
+            let path = MountingManager.shared.findExistingMountPath(for: url)
+            let inFlight = MountingManager.shared.isMountInFlight(server.id)
+            DispatchQueue.main.async {
+                guard state.servers.contains(where: { $0.id == server.id && $0.mountURLString == server.mountURLString }),
+                      (state.serverOperations[server.id] ?? .idle) == expected else { return }
+                state.serverOperations[server.id] = expected.refreshed(
+                    mountPath: path,
+                    hasNetwork: NetworkMonitor.shared.currentFingerprint != nil,
+                    mountInFlight: inFlight
+                )
             }
         }
     }
 
     private func openFolder() {
-        guard let path = currentMountPath else { return }
+        guard !operation.isBusy, let path = currentMountPath else { return }
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
     }
 
@@ -403,6 +439,7 @@ struct ServerRow: View {
     }
 
     private func openPinnedFolder(_ pin: PinnedFolder) {
+        guard !operation.isBusy else { return }
         let subpath = pin.subpath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
         if let path = currentMountPath {
             let fullPath = (path as NSString).appendingPathComponent(subpath)
@@ -416,20 +453,23 @@ struct ServerRow: View {
     }
 
     private func ensureMounted(then action: @escaping (String) -> Void) {
-        mountStatus = "Connecting..."
+        guard !operation.isBusy, !appState.isSavingServer else { return }
+        let state = appState
+        state.serverOperations[server.id] = .connecting
         MountingManager.shared.mount(config: server) { result in
             DispatchQueue.main.async {
+                guard let current = state.servers.first(where: { $0.id == server.id }) else { return }
+                guard current.mountURLString == server.mountURLString else {
+                    state.serverOperations[server.id] = .idle
+                    return
+                }
                 switch result {
                 case .success(let path):
-                    isMounted = true
-                    currentMountPath = path
-                    mountStatus = "Mounted at: \(path)"
+                    state.serverOperations[server.id] = .mounted(path)
                     NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
                     action(path)
                 case .failure(let error):
-                    isMounted = false
-                    currentMountPath = nil
-                    mountStatus = "Error: \(error.localizedDescription)"
+                    state.serverOperations[server.id] = .failed(error.localizedDescription, mountPath: nil)
                     logger.error("Mount error: \(error.localizedDescription)")
                 }
             }
@@ -437,22 +477,21 @@ struct ServerRow: View {
     }
 
     private func toggleMount() {
-        if isMounted {
-            mountStatus = "Unmounting..."
-            guard let path = currentMountPath else {
-                isMounted = false
-                currentMountPath = nil
-                mountStatus = "Idle"
-                return
-            }
+        guard !operation.isBusy, !appState.isSavingServer else { return }
+        if let path = currentMountPath {
+            let state = appState
+            state.serverOperations[server.id] = .disconnecting(path)
             MountingManager.shared.unmount(mountPath: path) { error in
                 DispatchQueue.main.async {
-                    if let error = error {
-                        mountStatus = "Unmount Failed: \(error.localizedDescription)"
+                    guard let current = state.servers.first(where: { $0.id == server.id }) else { return }
+                    guard current.mountURLString == server.mountURLString else {
+                        state.serverOperations[server.id] = .idle
+                        return
+                    }
+                    if let error {
+                        state.serverOperations[server.id] = .failed(error.localizedDescription, mountPath: path)
                     } else {
-                        isMounted = false
-                        currentMountPath = nil
-                        mountStatus = "Idle"
+                        state.serverOperations[server.id] = .idle
                         NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
                     }
                 }
@@ -463,6 +502,7 @@ struct ServerRow: View {
             }
         }
     }
+
 }
 
 struct FlowLayout: Layout {

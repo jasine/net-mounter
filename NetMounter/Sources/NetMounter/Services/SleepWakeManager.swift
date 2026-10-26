@@ -35,6 +35,7 @@ class SleepWakeManager {
     // MARK: - Sleep
 
     @objc private func handleWillSleep(_ notification: Notification) {
+        DiagnosticsService.shared.breadcrumb(.sleep)
         logger.info("System will sleep — snapshotting and unmounting network volumes")
 
         sleepSnapshot = MountingManager.shared.getAllNetworkMounts(matching: appState.servers)
@@ -67,6 +68,7 @@ class SleepWakeManager {
     // MARK: - Wake
 
     @objc private func handleDidWake(_ notification: Notification) {
+        DiagnosticsService.shared.breadcrumb(.wake)
         logger.info("System did wake — waiting for network")
 
         guard !sleepSnapshot.isEmpty else {
@@ -88,6 +90,7 @@ class SleepWakeManager {
         // Safety timeout — don't wait forever
         let timeoutWork = DispatchWorkItem { [weak self] in
             guard let self = self, self.isAwaitingReconnect else { return }
+            DiagnosticsService.shared.begin(.wakeReconnect).finish(error: ConnectionError.timeout)
             logger.warning("Wake network timeout (30s) — abandoning reconnect")
             let count = self.sleepSnapshot.count
             self.cancelWakeWait()
@@ -116,6 +119,7 @@ class SleepWakeManager {
     }
 
     private func remountManual(snapshot: MountSnapshot) {
+        let diagnostic = DiagnosticsService.shared.begin(.wakeReconnect)
         DispatchQueue.global(qos: .utility).async {
             var mountpoints: Unmanaged<CFArray>?
             let result = NetFSMountURLSync(
@@ -123,6 +127,7 @@ class SleepWakeManager {
                 nil, nil, nil, nil, nil,
                 &mountpoints
             )
+            diagnostic.finish(error: result == 0 ? nil : MountError.mountFailed(result))
             if result == 0 {
                 logger.info("Restored manual mount: \(snapshot.volumePath)")
             } else {
@@ -173,13 +178,19 @@ class SleepWakeManager {
     }
 
     private func forceUnmount(path: String) {
+        let diagnostic = DiagnosticsService.shared.begin(.forceUnmount)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         process.arguments = ["unmount", "force", path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
+        } catch {
+            diagnostic.finish(error: error)
+        }
     }
 
     deinit {

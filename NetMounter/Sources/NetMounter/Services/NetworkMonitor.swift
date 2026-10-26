@@ -17,8 +17,8 @@ class NetworkMonitor: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let pathSubject = PassthroughSubject<NWPath, Never>()
     
-    init() {
-        startMonitoring()
+    init(startMonitoring: Bool = true) {
+        if startMonitoring { self.startMonitoring() }
     }
     
     func startMonitoring() {
@@ -97,6 +97,7 @@ class NetworkMonitor: ObservableObject {
             self.currentPath = path
             if self.currentFingerprint != fingerprint {
                 self.currentFingerprint = fingerprint
+                DiagnosticsService.shared.breadcrumb(.networkChanged)
                 logger.info("Network changed: \(String(describing: self.currentFingerprint))")
             }
         }

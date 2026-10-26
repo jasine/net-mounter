@@ -9,6 +9,8 @@ enum MountError: LocalizedError, Equatable {
     case invalidURL
     case invalidShare
     case timedOut
+    case keychainReadFailed(Int32)
+    case cancellationFailed(Int32)
     case authenticationRequired
     case authenticationFailed
 
@@ -24,7 +26,11 @@ enum MountError: LocalizedError, Equatable {
         case .invalidShare:
             return "Missing share name. Enter the share/export path for this server."
         case .timedOut:
-            return "Mount timed out. The server did not respond."
+            return String(localized: "Mount timed out while waiting for macOS or the server. Automatic retries are paused; try mounting again manually.", bundle: .module)
+        case .keychainReadFailed:
+            return String(localized: "The saved password could not be read from Keychain. Allow access, unlock Keychain, or save the password again.", bundle: .module)
+        case .cancellationFailed:
+            return String(localized: "The previous mount request is still pending in macOS. Automatic retries are paused; the macOS network service may need to be restarted.", bundle: .module)
         case .authenticationRequired:
             return "Authentication required. Please add credentials."
         case .authenticationFailed:
@@ -48,7 +54,7 @@ enum MountError: LocalizedError, Equatable {
     /// a target that can never mount).
     var isNonRetryable: Bool {
         switch self {
-        case .invalidShare, .invalidURL:
+        case .invalidShare, .invalidURL, .timedOut, .keychainReadFailed, .cancellationFailed:
             return true
         default:
             return isAuthError
@@ -77,16 +83,15 @@ class MountingManager {
         case failure(Int32)     // NetFS/errno status code
     }
 
-    /// The low-level mount call, injectable for testing. Production uses
-    /// NetFSMountURLSync; tests substitute a stub (e.g. one that never calls
-    /// back, to exercise the timeout path). Parameters: url, user, password,
-    /// completion.
-    var performNetFSMount: ((URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> Void)?
+    /// Starts a cancellable NetFS request and returns its cancellation function.
+    /// A nonzero cancellation status keeps the in-flight guard until the actual callback.
+    var performNetFSMount: ((URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> (() -> Int32))?
 
-    /// Timeout for a single NetFS mount attempt. If the mount does not report
-    /// back within this window, the attempt is abandoned, the in-flight lock is
-    /// released, and `.timedOut` is returned — preventing a hung mount from
-    /// wedging the lock forever.
+    var readPassword: (String) -> Result<String, KeychainManager.ReadError> = {
+        KeychainManager.shared.readPassword(for: $0)
+    }
+
+    /// Starts after Keychain authorization, not while waiting for the user's response.
     var netFSMountTimeout: TimeInterval = 30.0
 
     func isMountInFlight(_ serverID: UUID) -> Bool {
@@ -108,35 +113,27 @@ class MountingManager {
     }
 
     func mount(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+        let diagnostic = DiagnosticsService.shared.begin(.mount, protocolType: config.serverProtocol, automatic: silent)
+        let complete: (Result<String, Error>) -> Void = { result in
+            if case .failure(let error) = result { diagnostic.finish(error: error) }
+            else { diagnostic.finish() }
+            completion(result)
+        }
         switch config.serverProtocol {
         case .nfs:
-            mountNFS(config: config, silent: silent, completion: completion)
+            mountNFS(config: config, silent: silent, completion: complete)
         case .smb, .afp, .webdav:
-            mountNetFS(config: config, silent: silent, completion: completion)
+            mountNetFS(config: config, silent: silent, completion: complete)
         }
     }
 
     func findExistingMountPath(for url: URL) -> String? {
-        let keys: [URLResourceKey] = [.volumeNameKey, .volumeURLForRemountingKey]
-        let mountedURLs = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [])
+        findExistingMountPath(for: url, in: getAllNetworkMounts(matching: []))
+    }
 
-        guard let targetShare = url.pathComponents.last else { return nil }
-        let targetHost = url.host?.lowercased()
-
-        for mountURL in mountedURLs ?? [] {
-            guard mountURL.lastPathComponent == targetShare else { continue }
-
-            if let values = try? mountURL.resourceValues(forKeys: Set(keys)),
-               let remountURL = values.volumeURLForRemounting {
-                let remountHost = remountURL.host?.lowercased()
-                if remountHost == targetHost || remountHost == nil || targetHost == nil {
-                    return mountURL.path
-                }
-            } else {
-                return mountURL.path
-            }
-        }
-        return nil
+    func findExistingMountPath(for url: URL, in mounts: [MountSnapshot]) -> String? {
+        // macOS may rename the local mount directory (e.g. media-1).
+        mounts.first { $0.matches(url) }?.volumePath
     }
 
     func getAllNetworkMounts(matching servers: [ServerConfig]) -> [MountSnapshot] {
@@ -164,6 +161,11 @@ class MountingManager {
     }
 
     func unmount(mountPath: String, completion: @escaping (Error?) -> Void) {
+        let diagnostic = DiagnosticsService.shared.begin(.unmount)
+        let complete: (Error?) -> Void = { error in
+            diagnostic.finish(error: error)
+            completion(error)
+        }
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
@@ -177,31 +179,37 @@ class MountingManager {
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 if process.terminationStatus == 0 {
-                    DispatchQueue.main.async { completion(nil) }
+                    DispatchQueue.main.async { complete(nil) }
                 } else {
                     let stderr = String(data: errorData, encoding: .utf8) ?? ""
                     logger.error("diskutil unmount failed: \(stderr)")
-                    DispatchQueue.main.async { completion(MountError.mountFailed(process.terminationStatus)) }
+                    DispatchQueue.main.async { complete(MountError.mountFailed(process.terminationStatus)) }
                 }
             } catch {
-                DispatchQueue.main.async { completion(error) }
+                DispatchQueue.main.async { complete(error) }
             }
         }
     }
 
     func forceUnmount(path: String) {
+        let diagnostic = DiagnosticsService.shared.begin(.forceUnmount)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         process.arguments = ["unmount", "force", path]
-        try? process.run()
-        process.waitUntilExit()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
+        } catch {
+            diagnostic.finish(error: error)
+        }
     }
 
     // MARK: - SMB/AFP/WebDAV Mount via NetFS
 
     private func mountNetFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
         // Reject un-mountable targets (e.g. smb://host with no share) before
-        // touching NetFS — such input makes NetFSMountURLSync hang.
+        // touching NetFS — a server URL without a share cannot be mounted.
         guard config.isValidMountTarget else {
             DispatchQueue.main.async { completion(.failure(MountError.invalidShare)) }
             return
@@ -213,83 +221,124 @@ class MountingManager {
             return
         }
 
-        // Release the lock and report exactly once, even if both the mount and
-        // the timeout fire.
+        // Report exactly once; keep the in-flight guard if native cancellation fails.
         let didComplete = NSLock()
         var completed = false
-        let wrappedCompletion: (Result<String, Error>) -> Void = { [weak self] result in
+        let wrappedCompletion: (Result<String, Error>, Bool) -> Void = { [weak self] result, releaseInflight in
             didComplete.lock()
             if completed { didComplete.unlock(); return }
             completed = true
             didComplete.unlock()
 
-            self?.clearInflight(config.id)
+            if releaseInflight { self?.clearInflight(config.id) }
             DispatchQueue.main.async { completion(result) }
         }
 
         guard let url = URL(string: config.mountURLString) else {
-            wrappedCompletion(.failure(MountError.invalidURL))
+            wrappedCompletion(.failure(MountError.invalidURL), true)
             return
         }
 
-        if let existingPath = findExistingMountPath(for: url) {
-            if isMountAlive(existingPath) {
-                wrappedCompletion(.success(existingPath))
-                return
-            } else {
-                forceUnmount(path: existingPath)
-            }
-        }
-
-        let user = config.username
-        let password: String? = {
-            guard let keyId = config.keychainItemId else { return nil }
-            return KeychainManager.shared.retrievePassword(for: keyId)
-        }()
-
-        // Timeout guard: if the mount never reports back within the window,
-        // abandon it, release the lock, and return .timedOut so a hung mount
-        // cannot wedge the lock forever.
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + netFSMountTimeout) {
-            wrappedCompletion(.failure(MountError.timedOut))
-        }
-
         let mountFn = performNetFSMount ?? Self.defaultNetFSMount
-        mountFn(url, user, password) { [weak self] mountResult in
-            guard let self = self else { return }
-            switch mountResult {
-            case .success(let path):
-                wrappedCompletion(.success(path ?? "Mounted (Unknown Path)"))
-            case .failure(let code):
-                if code == 17 || code == EEXIST,
-                   let existingPath = self.findExistingMountPath(for: url),
-                   self.isMountAlive(existingPath) {
-                    wrappedCompletion(.success(existingPath))
-                } else {
-                    wrappedCompletion(.failure(MountError.mountFailed(code)))
+        let passwordReader = readPassword
+        let timeoutInterval = netFSMountTimeout
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Volume probes and Keychain authorization can block; never run them on the UI thread.
+            if let existingPath = self.findExistingMountPath(for: url) {
+                if self.isMountAlive(existingPath) {
+                    wrappedCompletion(.success(existingPath), true)
+                    return
                 }
+                self.forceUnmount(path: existingPath)
+            }
+
+            var password: String?
+            if let keyID = config.keychainItemId {
+                logger.debug("Reading saved mount credentials for server \(config.id)")
+                switch passwordReader(keyID) {
+                case .success(let value): password = value
+                case .failure(.status(let status)):
+                    logger.error("Keychain read failed for server \(config.id); OSStatus=\(status). NetFS not started.")
+                    wrappedCompletion(.failure(MountError.keychainReadFailed(status)), true)
+                    return
+                }
+            }
+
+            // Serialize start, timeout/cancel and callback. A retry can only begin once
+            // cancellation succeeds, or the original native request actually finishes.
+            let requestQueue = DispatchQueue(label: "com.netmounter.netfs.\(config.id)")
+            requestQueue.async {
+                var completed = false
+                var pendingAfterTimeout = false
+                var cancel: () -> Int32 = { 0 }
+                let startedAt = Date()
+                let timeout = DispatchWorkItem {
+                    guard !completed else { return }
+                    completed = true
+                    let status = cancel()
+                    pendingAfterTimeout = status != 0
+                    logger.warning("NetFS timeout for server \(config.id); cancellation status=\(status)")
+                    let error: MountError = status == 0 ? .timedOut : .cancellationFailed(status)
+                    wrappedCompletion(.failure(error), !pendingAfterTimeout)
+                }
+
+                logger.info("Starting NetFS mount for server \(config.id); protocol=\(config.serverProtocol.rawValue)")
+                cancel = mountFn(url, config.username, password) { mountResult in
+                    requestQueue.async {
+                        guard !completed else {
+                            if pendingAfterTimeout {
+                                pendingAfterTimeout = false
+                                self.clearInflight(config.id)
+                                DispatchQueue.main.async {
+                                    NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
+                                }
+                            }
+                            return
+                        }
+                        completed = true
+                        timeout.cancel()
+                        let elapsed = Date().timeIntervalSince(startedAt)
+                        switch mountResult {
+                        case .success(let path):
+                            logger.info("NetFS mount completed for server \(config.id) after \(elapsed)s")
+                            wrappedCompletion(.success(path ?? "Mounted (Unknown Path)"), true)
+                        case .failure(let code):
+                            logger.error("NetFS mount failed for server \(config.id); status=\(code), elapsed=\(elapsed)s")
+                            if code == EEXIST,
+                               let existingPath = self.findExistingMountPath(for: url),
+                               self.isMountAlive(existingPath) {
+                                wrappedCompletion(.success(existingPath), true)
+                            } else {
+                                wrappedCompletion(.failure(MountError.mountFailed(code)), true)
+                            }
+                        }
+                    }
+                }
+                requestQueue.asyncAfter(deadline: .now() + timeoutInterval, execute: timeout)
             }
         }
     }
 
-    /// Production NetFS mount. Suppresses NetFS's own auth UI (NoUI): credentials
-    /// come from the app's own fields, not a system dialog that cannot be shown
-    /// from a background thread.
-    private static let defaultNetFSMount: (URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> Void = { url, user, password, completion in
-        DispatchQueue.global(qos: .userInitiated).async {
-            var mountpoints: Unmanaged<CFArray>? = nil
-            let result = NetFSMountURLSync(
-                url as CFURL, nil,
-                user as CFString?, password as CFString?,
-                noUIOptions(), nil, &mountpoints
-            )
-            if result == 0 {
-                let path = (mountpoints?.takeRetainedValue() as? [String])?.first
-                completion(.success(path))
+    /// Use NetFS's asynchronous API so timeouts cancel the real system request.
+    /// Credentials remain separate from the URL; NetFS's own authentication UI is suppressed.
+    private static let defaultNetFSMount: (URL, String?, String?, @escaping (NetFSMountResult) -> Void) -> (() -> Int32) = { url, user, password, completion in
+        var requestID: AsyncRequestID?
+        let status = NetFSMountURLAsync(
+            url as CFURL, nil,
+            user as CFString?, password as CFString?,
+            noUIOptions(), nil, &requestID, DispatchQueue.global(qos: .userInitiated)
+        ) { status, _, mountpoints in
+            if status == 0 {
+                completion(.success((mountpoints as? [String])?.first))
             } else {
-                completion(.failure(result))
+                completion(.failure(status))
             }
         }
+        guard status == 0, let requestID else {
+            completion(.failure(status == 0 ? EIO : status))
+            return { 0 }
+        }
+        return { NetFSMountURLCancel(requestID) }
     }
 
     private static func noUIOptions() -> CFMutableDictionary {
@@ -301,14 +350,14 @@ class MountingManager {
     // MARK: - NFS Mount
 
     private func mountNFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
-        let cleanShare = config.sharePath.trimmingCharacters(in: CharacterSet(charactersIn: "/\\ "))
-        guard !cleanShare.isEmpty else {
-            completion(.failure(MountError.invalidURL))
+        let cleanShare = config.normalizedSharePath
+        guard config.isValidMountTarget else {
+            DispatchQueue.main.async { completion(.failure(MountError.invalidShare)) }
             return
         }
 
-        guard let url = URL(string: config.urlString) else {
-            completion(.failure(MountError.invalidURL))
+        guard config.isValidHostname, let url = URL(string: config.urlString) else {
+            DispatchQueue.main.async { completion(.failure(MountError.invalidURL)) }
             return
         }
 
@@ -346,7 +395,7 @@ class MountingManager {
             mountProcess.arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
         } else {
             // Fallback: prompt for admin password via osascript (pre-install behavior).
-            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount -t nfs -o resvport,noowners,nosuid,nodev \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
+            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount_nfs -o resvport,noowners,nosuid,nodev -- \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
             let escapedShellCmd = appleScriptEscape(shellCmd)
             let script = silent
                 ? "do shell script \"\(escapedShellCmd)\""

@@ -34,6 +34,7 @@ dmg: package
 # Full release pipeline
 # Usage: make release VERSION=x.y.z
 release:
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "Error: VERSION must be X.Y.Z."; exit 1; }
 	@if [ -z "$(VERSION)" ]; then echo "Usage: make release VERSION=x.y.z"; exit 1; fi
 	@echo "==> Releasing NetMounter v$(VERSION)"
 	@echo ""
@@ -41,16 +42,17 @@ release:
 	@echo "--- Preflight checks ---"
 	@if [ -n "$$(git status --porcelain)" ]; then echo "Error: working tree is dirty. Commit or stash first."; exit 1; fi
 	@if git rev-parse "v$(VERSION)" >/dev/null 2>&1; then echo "Error: tag v$(VERSION) already exists."; exit 1; fi
+	@if [ "$$(git symbolic-ref --short HEAD)" != "main" ]; then echo "Error: releases must run from main."; exit 1; fi
 	@echo "OK"
 	@echo ""
 	@# 2. Update version in package_app.sh (Info.plist source of truth)
 	@echo "--- Updating versions ---"
 	@sed -i '' 's/VERSION="$${1:-[^"]*}"/VERSION="$${1:-$(VERSION)}"/' package_app.sh
-	@# 3. Update version in docs/index.html
-	@sed -i '' 's/v[0-9]*\.[0-9]*\.[0-9]* • macOS/v$(VERSION) • macOS/' ../docs/index.html
+	@# 3. Update HTML and both localized website version strings
+	@sed -i '' 's/v[0-9]*\.[0-9]*\.[0-9]* • macOS/v$(VERSION) • macOS/' ../docs/index.html ../docs/script.js
 	@# 4. Update version in Casks/netmounter.rb (sha256 updated later)
 	@sed -i '' 's/version "[^"]*"/version "$(VERSION)"/' ../Casks/netmounter.rb
-	@echo "Updated: package_app.sh, docs/index.html, Casks/netmounter.rb"
+	@echo "Updated: package_app.sh, docs/index.html, docs/script.js, Casks/netmounter.rb"
 	@echo ""
 	@# 5. Build, package, DMG
 	@echo "--- Building ---"
@@ -64,7 +66,7 @@ release:
 	@echo ""
 	@# 7. Commit version bump
 	@echo "--- Committing ---"
-	@git add package_app.sh ../docs/index.html ../Casks/netmounter.rb
+	@git add package_app.sh ../docs/index.html ../docs/script.js ../Casks/netmounter.rb
 	@git commit -m "release: v$(VERSION)"
 	@echo ""
 	@# 8. Tag
@@ -73,7 +75,7 @@ release:
 	@echo ""
 	@# 9. Push
 	@echo "--- Pushing ---"
-	@git push origin main --tags
+	@git push origin main "v$(VERSION)"
 	@echo ""
 	@# 10. GitHub Release
 	@echo "--- Creating GitHub Release ---"

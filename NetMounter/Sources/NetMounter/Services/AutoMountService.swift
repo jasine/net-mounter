@@ -5,12 +5,20 @@ import Logging
 private let logger = Logger(label: "AutoMount")
 
 class AutoMountService: ObservableObject {
+    typealias ReachabilityCheck = (String, UInt16, @escaping (Result<Bool, Error>) -> Void) -> Void
+    typealias MountAction = (ServerConfig, Bool, @escaping (Result<String, Error>) -> Void) -> Void
+    private let checkReachability: ReachabilityCheck
+    private let mountServer: MountAction
     private var appState: AppState
     private var networkMonitor: NetworkMonitor
     private var cancellables = Set<AnyCancellable>()
 
     // Store pending retry work items so we can cancel them if network changes
+    private var reachabilityRequests: [UUID: UUID] = [:]
+    private var wolPollGenerations: [String: UUID] = [:]
     private var retryWorkItems: [UUID: DispatchWorkItem] = [:]
+    // Health checks must not restart a terminal failure or an exhausted retry budget.
+    private var stoppedAutoMounts: [UUID: NetworkFingerprint] = [:]
 
     // Track servers mounted via VPN route so we can unmount on VPN disconnect
     private var vpnMountedServerIDs: Set<UUID> = []
@@ -28,9 +36,17 @@ class AutoMountService: ObservableObject {
     // Timer for periodic health checks
     private var healthCheckTimer: AnyCancellable?
     
-    init(appState: AppState, networkMonitor: NetworkMonitor = .shared) {
+    init(appState: AppState, networkMonitor: NetworkMonitor = .shared,
+         checkReachability: @escaping ReachabilityCheck = { host, port, completion in
+             ConnectionTester.shared.checkReachability(host: host, port: port, completion: completion)
+         },
+         mountServer: @escaping MountAction = { config, silent, completion in
+             MountingManager.shared.mount(config: config, silent: silent, completion: completion)
+         }) {
         self.appState = appState
         self.networkMonitor = networkMonitor
+        self.checkReachability = checkReachability
+        self.mountServer = mountServer
         
         setupBindings()
         setupHealthCheckTimer()
@@ -46,18 +62,65 @@ class AutoMountService: ObservableObject {
     }
     
     private func setupBindings() {
-        // Watch for network changes
         networkMonitor.$currentFingerprint
-            .compactMap { $0 }
             .removeDuplicates()
-            .debounce(for: .seconds(2), scheduler: DispatchQueue.main) // Wait for network to settle
+            .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
             .sink { [weak self] fingerprint in
-                self?.evaluateAutoMount(for: fingerprint)
+                guard let self else { return }
+                if let fingerprint {
+                    self.stoppedAutoMounts = self.stoppedAutoMounts.filter { $0.value == fingerprint }
+                    self.evaluateAutoMount(for: fingerprint)
+                } else {
+                    self.stoppedAutoMounts.removeAll()
+                    self.lastEvaluation = nil
+                    self.cancelAllRetries()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Cancel queued work as soon as editing starts or a configuration changes.
+        appState.$servers.combineLatest(appState.$isSavingServer)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.stoppedAutoMounts.removeAll()
+                self?.cancelAllRetries()
+            }
+            .store(in: &cancellables)
+
+        // Re-evaluate the saved rules, but never race a password or helper transaction.
+        appState.$servers.combineLatest(appState.$isSavingServer)
+            .dropFirst()
+            .debounce(for: .seconds(2), scheduler: DispatchQueue.main)
+            .sink { [weak self] _, saving in
+                guard let self, !saving, let fingerprint = self.networkMonitor.currentFingerprint else { return }
+                self.lastEvaluation = nil
+                self.evaluateAutoMount(for: fingerprint)
             }
             .store(in: &cancellables)
     }
-    
+
+    /// Reject queued snapshots whose target/credentials changed or whose rules were paused/deleted.
+    static func currentEnabledServer(_ snapshot: ServerConfig, in servers: [ServerConfig]) -> ServerConfig? {
+        servers.first {
+            $0.id == snapshot.id && $0.hasEnabledAutoMountRules
+                && $0.hostname == snapshot.hostname && $0.serverProtocol == snapshot.serverProtocol
+                && $0.normalizedSharePath == snapshot.normalizedSharePath
+                && $0.username == snapshot.username && $0.keychainItemId == snapshot.keychainItemId
+        }
+    }
+
+    private func eligibleServer(_ snapshot: ServerConfig) -> ServerConfig? {
+        guard !appState.isSavingServer,
+              let fingerprint = networkMonitor.currentFingerprint,
+              stoppedAutoMounts[snapshot.id] != fingerprint,
+              let current = Self.currentEnabledServer(snapshot, in: appState.servers),
+              current.shouldAutoMount(for: fingerprint, isVPN: vpnMountedServerIDs.contains(current.id)) else { return nil }
+        return current
+    }
+
     func evaluateAutoMount(for fingerprint: NetworkFingerprint) {
+        guard !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if let last = lastEvaluation, last.fingerprint == fingerprint, now - last.uptime < 5.0 {
             logger.debug("Skipping duplicate evaluation for same fingerprint")
@@ -88,20 +151,24 @@ class AutoMountService: ObservableObject {
     }
 
     private func processAutoMount(servers: [ServerConfig], fingerprint: NetworkFingerprint, vpnResults: [String: Bool]) {
+        guard !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
         vpnMountedServerIDs.formIntersection(Set(servers.map(\.id)))
 
-        for server in servers {
-            guard let url = URL(string: server.urlString) else { continue }
+        for snapshot in servers {
+            guard let server = Self.currentEnabledServer(snapshot, in: appState.servers),
+                  let url = URL(string: server.urlString) else { continue }
 
             let isVPN = vpnResults[server.hostname] ?? false
 
             if server.shouldAutoMount(for: fingerprint, isVPN: isVPN) {
                 if let path = MountingManager.shared.findExistingMountPath(for: url) {
                     logger.debug("Server \(server.alias) already mounted at \(path). Skipping.")
-                    if isVPN { vpnMountedServerIDs.insert(server.id) }
+                    let operation = appState.serverOperations[server.id] ?? .idle
+                    appState.serverOperations[server.id] = operation.refreshed(mountPath: path, hasNetwork: true, mountInFlight: false)
+                    if isVPN { vpnMountedServerIDs.insert(server.id) } else { vpnMountedServerIDs.remove(server.id) }
                     continue
                 }
-                if isVPN { vpnMountedServerIDs.insert(server.id) }
+                if isVPN { vpnMountedServerIDs.insert(server.id) } else { vpnMountedServerIDs.remove(server.id) }
                 attemptMount(server)
             } else if !isVPN && vpnMountedServerIDs.contains(server.id) {
                 vpnMountedServerIDs.remove(server.id)
@@ -114,7 +181,7 @@ class AutoMountService: ObservableObject {
     }
     
     private func performPeriodicHealthCheck() {
-        guard let currentFingerprint = networkMonitor.currentFingerprint else {
+        guard !appState.isSavingServer, let currentFingerprint = networkMonitor.currentFingerprint else {
             logger.debug("No current network fingerprint available for periodic check.")
             return
         }
@@ -140,12 +207,22 @@ class AutoMountService: ObservableObject {
                     if MountingManager.shared.isMountAlive(path) {
                         logger.debug("Periodic check: \(server.alias) alive at \(path).")
                     } else {
+                        DiagnosticsService.shared.breadcrumb(.staleMount)
                         logger.warning("Periodic check: \(server.alias) is zombie at \(path). Recovering...")
-                        MountingManager.shared.forceUnmount(path: path)
                         DispatchQueue.main.async {
-                            self.attemptMount(server, retryCount: 0, onSuccess: {
-                                NotificationService.shared.notifyZombieHealed(server: server)
-                            })
+                            guard let current = self.eligibleServer(server),
+                                  !(self.appState.serverOperations[current.id]?.isBusy ?? false) else { return }
+                            self.appState.serverOperations[current.id] = .connecting
+                            DispatchQueue.global(qos: .utility).async {
+                                MountingManager.shared.forceUnmount(path: path)
+                                DispatchQueue.main.async {
+                                    guard self.appState.servers.contains(where: { $0.id == current.id }) else { return }
+                                    self.appState.serverOperations[current.id] = .idle
+                                    self.attemptMount(current, retryCount: 0, onSuccess: {
+                                        NotificationService.shared.notifyZombieHealed(server: current)
+                                    })
+                                }
+                            }
                         }
                     }
                 } else {
@@ -158,52 +235,76 @@ class AutoMountService: ObservableObject {
         }
     }
     
-    private func attemptMount(_ server: ServerConfig, retryCount: Int = 0, onSuccess: (() -> Void)? = nil) {
-        // If this is a fresh attempt (retryCount == 0), cancel any existing retry for this server
-        // to avoid double-mounting if evaluateAutoMount is called rapidly (though debounced).
-        if retryCount == 0 {
-            cancelRetry(for: server)
-        }
-        
+    /// Explicit notification retry, unlike an automatic health check, may resume this server.
+    func retryMount(_ serverID: UUID) {
+        guard let server = appState.servers.first(where: { $0.id == serverID }) else { return }
+        stoppedAutoMounts.removeValue(forKey: serverID)
+        attemptMount(server)
+    }
+
+    func attemptMount(_ snapshot: ServerConfig, retryCount: Int = 0, onSuccess: (() -> Void)? = nil) {
+        guard let server = eligibleServer(snapshot),
+              !(appState.serverOperations[server.id]?.isBusy ?? false),
+              !MountingManager.shared.isMountInFlight(server.id) else { return }
+        if retryCount == 0 { cancelRetry(for: server) }
+
+        let request = UUID()
+        let fingerprint = networkMonitor.currentFingerprint
+        reachabilityRequests[server.id] = request
+        appState.serverOperations[server.id] = .connecting
+        DiagnosticsService.shared.breadcrumb(.autoMount)
         logger.info("Auto-mount \(server.alias) attempt \(retryCount + 1)")
-        
-        // Verify connectivity first
-        ConnectionTester.shared.checkReachability(host: server.hostname, port: server.serverProtocol.defaultPort) { [weak self] result in
+        checkReachability(server.hostname, server.serverProtocol.defaultPort) { [weak self] result in
             DispatchQueue.main.async {
+                guard let self, self.reachabilityRequests[server.id] == request else { return }
+                self.reachabilityRequests.removeValue(forKey: server.id)
+                guard fingerprint == self.networkMonitor.currentFingerprint,
+                      let current = self.eligibleServer(server) else {
+                    self.appState.serverOperations[server.id] = .idle
+                    return
+                }
                 switch result {
                 case .success(true):
-                    logger.info("\(server.hostname) reachable. Mounting...")
-                    MountingManager.shared.mount(config: server, silent: retryCount > 0) { mountResult in
-                        switch mountResult {
-                        case .success(let path):
-                            logger.info("Mounted \(server.alias) at \(path)")
-                            NotificationService.shared.notifyMountSucceeded(server: server)
-                            NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
-                            self?.learnMACIfNeeded(for: server)
-                            onSuccess?()
-                        case .failure(let error):
-                            if let mountError = error as? MountError, mountError.isNonRetryable {
-                                logger.warning("Cannot mount \(server.alias) (\(mountError.localizedDescription)) — skipping retries. Fix the server config in settings.")
-                                NotificationService.shared.notifyMountFailed(server: server)
-                            } else {
-                                logger.error("Failed to mount \(server.alias): \(error.localizedDescription)")
-                                self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                    self.mountServer(current, retryCount > 0) { mountResult in
+                        DispatchQueue.main.async {
+                            guard let saved = self.appState.servers.first(where: { $0.id == current.id }) else { return }
+                            guard saved.mountURLString == current.mountURLString else {
+                                self.appState.serverOperations[current.id] = .idle
+                                return
+                            }
+                            switch mountResult {
+                            case .success(let path):
+                                self.appState.serverOperations[current.id] = .mounted(path)
+                                NotificationService.shared.notifyMountSucceeded(server: current)
+                                NotificationCenter.default.post(name: .mountStateDidChange, object: nil)
+                                self.learnMACIfNeeded(for: current)
+                                onSuccess?()
+                            case .failure(let error):
+                                self.appState.serverOperations[current.id] = .failed(error.localizedDescription, mountPath: nil)
+                                if let mountError = error as? MountError, mountError.isNonRetryable {
+                                    self.stoppedAutoMounts[current.id] = fingerprint
+                                    NotificationService.shared.notifyMountFailed(server: current, retries: retryCount)
+                                } else {
+                                    self.scheduleRetry(for: current, currentRetryCount: retryCount)
+                                }
                             }
                         }
                     }
                 case .success(false), .failure:
-                    logger.debug("\(server.hostname) not reachable.")
-                    if retryCount == 0 && server.wolEnabled && server.wolMACAddress != nil {
-                        self?.attemptWOLAndPoll(server)
+                    self.appState.serverOperations[current.id] = .failed(
+                        String(localized: "Server port is unreachable. Check the address, network, and server service.", bundle: .module), mountPath: nil)
+                    if retryCount == 0 && current.wolEnabled && current.wolMACAddress != nil {
+                        self.attemptWOLAndPoll(current)
                     } else {
-                        self?.scheduleRetry(for: server, currentRetryCount: retryCount)
+                        self.scheduleRetry(for: current, currentRetryCount: retryCount)
                     }
                 }
             }
         }
     }
-    
-    private func scheduleRetry(for server: ServerConfig, currentRetryCount: Int) {
+
+    private func scheduleRetry(for snapshot: ServerConfig, currentRetryCount: Int) {
+        guard let server = eligibleServer(snapshot) else { return }
         // NFS mounts require root — silent retries (without admin dialog) always fail
         if server.serverProtocol == .nfs {
             logger.info("NFS mount requires admin privileges, skipping silent retries for \(server.alias)")
@@ -213,18 +314,23 @@ class AutoMountService: ObservableObject {
 
         let maxRetries = 5
         guard currentRetryCount < maxRetries else {
+            DiagnosticsService.shared.begin(.retriesExhausted, protocolType: server.serverProtocol, automatic: true)
+                .finish(error: ConnectionError.connectionFailed)
             logger.warning("Max retries reached for \(server.alias). Giving up.")
+            stoppedAutoMounts[server.id] = networkMonitor.currentFingerprint
             NotificationService.shared.notifyMountFailed(server: server)
             return
         }
         
         let delay: TimeInterval = 2.0 * pow(2.0, Double(currentRetryCount))
+        DiagnosticsService.shared.breadcrumb(.retryScheduled)
         logger.debug("Scheduling retry for \(server.alias) in \(delay)s...")
         
         let workItem = DispatchWorkItem { [weak self] in
             self?.attemptMount(server, retryCount: currentRetryCount + 1)
         }
         
+        cancelRetry(for: server)
         retryWorkItems[server.id] = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
@@ -237,6 +343,14 @@ class AutoMountService: ObservableObject {
     }
     
     private func cancelAllRetries() {
+        let pendingIDs = Set(reachabilityRequests.keys).union(wolPendingServers.values.flatMap { $0.map(\.id) })
+        reachabilityRequests.removeAll()
+        wolPollGenerations.removeAll()
+        for id in pendingIDs where !MountingManager.shared.isMountInFlight(id) {
+            if appState.serverOperations[id] == .connecting {
+                appState.serverOperations[id] = .idle
+            }
+        }
         for item in retryWorkItems.values {
             item.cancel()
         }
@@ -263,16 +377,19 @@ class AutoMountService: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if var updated = self.appState.servers.first(where: { $0.id == server.id }),
-                   updated.wolMACAddress == nil {
+                   updated.hostname == server.hostname, updated.wolMACAddress == nil {
                     updated.wolMACAddress = mac
-                    self.appState.updateServer(updated)
-                    logger.info("Auto-learned MAC \(mac) for \(server.alias)")
+                    if case .success = self.appState.updateServer(updated) {
+                        logger.info("Auto-learned MAC \(mac) for \(server.alias)")
+                    }
                 }
             }
         }
     }
 
-    private func attemptWOLAndPoll(_ server: ServerConfig) {
+    private func attemptWOLAndPoll(_ snapshot: ServerConfig) {
+        guard let server = eligibleServer(snapshot), server.wolEnabled else { return }
+        appState.serverOperations[server.id] = .connecting
         let hostname = server.hostname
 
         if wolPendingServers[hostname] != nil {
@@ -282,6 +399,8 @@ class AutoMountService: ObservableObject {
         }
 
         wolPendingServers[hostname] = [server]
+        let generation = UUID()
+        wolPollGenerations[hostname] = generation
 
         guard let mac = server.wolMACAddress else {
             logger.warning("WOL enabled but no MAC for \(server.alias), skipping")
@@ -290,6 +409,12 @@ class AutoMountService: ObservableObject {
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let allowed = DispatchQueue.main.sync {
+                guard let self, self.wolPollGenerations[hostname] == generation,
+                      let current = self.eligibleServer(server), current.wolEnabled else { return false }
+                return true
+            }
+            guard allowed else { return }
             do {
                 try WOLService.shared.wake(
                     macAddress: mac,
@@ -298,12 +423,14 @@ class AutoMountService: ObservableObject {
                 )
                 logger.info("WOL sent for \(server.alias) (\(mac))")
                 DispatchQueue.main.async {
+                    guard self?.wolPollGenerations[hostname] == generation else { return }
                     self?.pollReachability(hostname: hostname, port: server.serverProtocol.defaultPort,
                                            interval: 3.0, remaining: 60.0)
                 }
             } catch {
                 logger.error("WOL failed for \(server.alias): \(error.localizedDescription)")
                 DispatchQueue.main.async {
+                    guard self?.wolPollGenerations[hostname] == generation else { return }
                     self?.drainWOLQueue(hostname: hostname, reachable: false)
                 }
             }
@@ -312,7 +439,10 @@ class AutoMountService: ObservableObject {
 
     private func pollReachability(hostname: String, port: UInt16,
                                   interval: TimeInterval, remaining: TimeInterval) {
+        guard let generation = wolPollGenerations[hostname],
+              wolPendingServers[hostname]?.contains(where: { eligibleServer($0) != nil }) == true else { return }
         guard remaining > 0 else {
+            DiagnosticsService.shared.begin(.wolTimeout).finish(error: ConnectionError.timeout)
             logger.warning("WOL poll timeout for \(hostname)")
             if let servers = wolPendingServers[hostname] {
                 for s in servers {
@@ -324,9 +454,10 @@ class AutoMountService: ObservableObject {
         }
 
         let work = DispatchWorkItem { [weak self] in
-            ConnectionTester.shared.checkReachability(host: hostname, port: port) { result in
+            guard let self, self.wolPollGenerations[hostname] == generation else { return }
+            self.checkReachability(hostname, port) { result in
                 DispatchQueue.main.async {
-                    guard let self = self else { return }
+                    guard self.wolPollGenerations[hostname] == generation else { return }
                     switch result {
                     case .success(true):
                         logger.info("\(hostname) became reachable after WOL")
@@ -345,6 +476,13 @@ class AutoMountService: ObservableObject {
     private func drainWOLQueue(hostname: String, reachable: Bool) {
         let servers = wolPendingServers.removeValue(forKey: hostname) ?? []
         wolPollTimers.removeValue(forKey: hostname)
+        wolPollGenerations.removeValue(forKey: hostname)
+        for server in servers {
+            if appState.serverOperations[server.id] == .connecting {
+                appState.serverOperations[server.id] = reachable ? .idle : .failed(
+                    String(localized: "Server did not become reachable after wake-up.", bundle: .module), mountPath: nil)
+            }
+        }
 
         if reachable {
             for server in servers {

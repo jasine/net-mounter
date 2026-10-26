@@ -4,6 +4,7 @@ struct DiscoveryView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var appState: AppState
     @StateObject private var discoveryService = NetworkDiscoveryService()
+    @State private var serverDraft: ServerConfig?
     @State private var expandedServers: Set<UUID> = []
 
     var body: some View {
@@ -76,7 +77,7 @@ struct DiscoveryView: View {
                                     isEnumerating: discoveryService.isEnumeratingShares[server.id] ?? false,
                                     isExpanded: expandedServers.contains(server.id),
                                     isAlreadyAdded: { shareName in
-                                        isShareAlreadyAdded(host: server.host, sharePath: shareName)
+                                        isShareAlreadyAdded(host: server.host, sharePath: shareName, protocolType: server.protocolType)
                                     },
                                     onToggleExpand: {
                                         toggleExpand(server)
@@ -96,6 +97,9 @@ struct DiscoveryView: View {
             }
         }
         .frame(width: 380, height: 480)
+        .sheet(item: $serverDraft) { draft in
+            ServerDetailView(config: draft, isNew: true)
+        }
         .onAppear {
             discoveryService.startScan()
         }
@@ -117,8 +121,9 @@ struct DiscoveryView: View {
         }
     }
 
-    private func isShareAlreadyAdded(host: String, sharePath: String) -> Bool {
+    private func isShareAlreadyAdded(host: String, sharePath: String, protocolType: NetworkProtocol) -> Bool {
         appState.servers.contains { existing in
+            existing.serverProtocol == protocolType &&
             existing.hostname.lowercased() == host.lowercased() &&
             existing.sharePath.lowercased() == sharePath.lowercased()
         }
@@ -127,23 +132,12 @@ struct DiscoveryView: View {
     private func addServer(from server: DiscoveredServer, sharePath: String) {
         let lastComponent = URL(fileURLWithPath: sharePath).lastPathComponent
         let alias = sharePath.isEmpty ? server.name : lastComponent
-        var rules: [AutoMountRule] = []
-        if let fingerprint = NetworkMonitor.shared.currentFingerprint {
-            rules.append(AutoMountRule(fingerprint: fingerprint))
-        }
-        let config = ServerConfig(
+        serverDraft = ServerConfig(
             alias: alias,
             serverProtocol: server.protocolType,
             hostname: server.host,
-            sharePath: sharePath,
-            autoMountRules: rules
+            sharePath: sharePath
         )
-
-        appState.addServer(config)
-
-        if server.protocolType != .nfs {
-            MountingManager.shared.mount(config: config) { _ in }
-        }
     }
 
 }

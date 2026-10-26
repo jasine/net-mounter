@@ -69,6 +69,7 @@ enum PrivilegedMountInstaller {
         runOSAScript: @escaping (String) -> Int32 = defaultRunner,
         completion: @escaping (InstallResult) -> Void
     ) {
+        let diagnostic = DiagnosticsService.shared.begin(.nfsHelper)
         DispatchQueue.global(qos: .userInitiated).async {
             let code = runOSAScript(installScript())
             let result: InstallResult
@@ -76,6 +77,11 @@ enum PrivilegedMountInstaller {
             case 0: result = .installed
             case 1: result = .cancelled   // osascript: user canceled auth dialog
             default: result = .failed("install exited with code \(code)")
+            }
+            switch code {
+            case 0: diagnostic.finish()
+            case 1: diagnostic.finish(error: CocoaError(.userCancelled))
+            default: diagnostic.finish(error: MountError.mountFailed(code))
             }
             DispatchQueue.main.async { completion(result) }
         }

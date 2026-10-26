@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"${CLAUDE_FILE_PATH:-}\"; if [ -n \"$filepath\" ] && echo \"$filepath\" | grep -qE '\\.resolved$|\\.dmg$|\\.build/'; then echo 'BLOCK: do not edit build artifacts directly'; exit 2; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"${CLAUDE_FILE_PATH:-}\"; if [ -n \"$filepath\" ] && echo \"$filepath\" | grep -qE '\\.env|\\.pem|credentials'; then echo 'BLOCK: sensitive file — confirm manually'; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"${CLAUDE_FILE_PATH:-}\"; if [ -n \"$filepath\" ] && echo \"$filepath\" | grep -q '\\.swift$'; then root=\"$(git rev-parse --show-toplevel)\" && cd \"$root/NetMounter\" && swift build 2>&1 | tail -20; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "filepath=\"${CLAUDE_FILE_PATH:-}\"; if [ -n \"$filepath\" ] && echo \"$filepath\" | grep -q '\\.swift$'; then root=\"$(git rev-parse --show-toplevel)\" && cd \"$root/NetMounter\" && swift test 2>&1 | tail -5; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
