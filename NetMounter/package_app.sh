@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Configuration
 APP_NAME="NetMounter"
-VERSION="${1:-1.4.0}"
+VERSION="${1:-1.4.1}"
 SIGNING_IDENTITY="${NETMOUNTER_SIGNING_IDENTITY:--}"
 BUILD_DIR=".build/apple/Products/Release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
