@@ -3,6 +3,8 @@ import XCTest
 @testable import NetMounter
 
 final class PackagingTests: XCTestCase {
+    private let fixtureVersion = "9.8.7"
+
     func testPackagingCopiesResourcesAndStripsDebugPathsBeforeSigning() throws {
         let folder = try makeFixture(includeResources: true)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -10,7 +12,8 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.output)
         let plistData = try Data(contentsOf: folder.appendingPathComponent("NetMounter.app/Contents/Info.plist"))
         let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any])
-        XCTAssertEqual(info["CFBundleVersion"] as? String, "1.4.0", "Do not collapse every x.y.0 release to build 0")
+        XCTAssertEqual(info["CFBundleShortVersionString"] as? String, fixtureVersion)
+        XCTAssertEqual(info["CFBundleVersion"] as? String, fixtureVersion, "Preserve the full version, including the patch number")
         let resources = folder.appendingPathComponent("NetMounter.app/Contents/Resources/NetMounter_NetMounter.bundle")
         let bundle = try XCTUnwrap(Bundle(url: resources))
         XCTAssertNotNil(bundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: nil, localization: "en"))
@@ -89,7 +92,7 @@ final class PackagingTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [package.appendingPathComponent("package_app.sh").path]
+        process.arguments = [package.appendingPathComponent("package_app.sh").path, fixtureVersion]
         process.currentDirectoryURL = folder
         var environment = ProcessInfo.processInfo.environment
         environment["NETMOUNTER_SIGNING_IDENTITY"] = signingIdentity
