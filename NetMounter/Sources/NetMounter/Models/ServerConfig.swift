@@ -64,6 +64,14 @@ struct ServerConfig: Codable, Identifiable {
     // We store a reference to the password in the Keychain, not the password itself.
     var keychainItemId: String?
     
+    // Missing in older configurations: ordinary-user NFS mounts are the default.
+    var nfsReservedPort: Bool?
+
+    var usesReservedNFSPort: Bool {
+        get { nfsReservedPort ?? false }
+        set { nfsReservedPort = newValue }
+    }
+
     // Auto-mount rules
     var autoMountRules: [AutoMountRule] = []
     var pinnedFolders: [PinnedFolder] = []

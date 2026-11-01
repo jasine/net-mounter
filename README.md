@@ -99,10 +99,10 @@ NetMounter can automatically discover network servers and shares:
 
 | Protocol | Use Case | Mount Method |
 |----------|----------|-------------|
-| **SMB** | Windows/NAS file sharing | NetFS (no password needed) |
-| **AFP** | Apple file sharing (legacy) | NetFS (no password needed) |
-| **NFS** | Linux/Unix/NAS file sharing | Privileged mount (admin auth required) |
-| **WebDAV** | Network storage (Nextcloud, etc.) | NetFS (no password needed) |
+| **SMB** | Windows/NAS file sharing | NetFS (saved Keychain credentials or guest/session access) |
+| **AFP** | Apple file sharing (legacy) | NetFS (saved Keychain credentials or guest/session access) |
+| **NFS** | Linux/Unix/NAS file sharing | User-owned mount directory; optional reserved-port compatibility |
+| **WebDAV** | Network storage (Nextcloud, etc.) | NetFS (saved Keychain credentials or guest/session access) |
 
 ## ⚙️ Auto-Mount
 
@@ -124,10 +124,11 @@ NetMounter automatically detects when your servers are routed through a VPN:
 
 ## 😴 Sleep/Wake Reconnect
 
-Never lose your network mounts after waking from sleep:
+Recover network mounts after waking from sleep:
 
-- Before sleep: gracefully disconnects all network mounts to prevent stale/zombie volumes
-- After wake: waits for network to stabilize, then automatically reconnects managed and manual mounts
+- Before sleep: pauses automatic mounting and starts non-blocking graceful unmounts, with force-unmount fallback
+- After wake: refreshes network detection and waits for pending cleanup before reconnecting
+- Configured servers reuse their saved Keychain credentials; unmanaged mounts reuse session/guest access without showing a server login dialog
 - Includes a 30-second timeout for network recovery with notification on failure
 
 ## 🔗 URL Scheme Sharing
@@ -149,6 +150,23 @@ netmounter://add?host=192.168.1.100&proto=smb&share=shared&alias=NAS
 - Passwords are not written to configuration files; server addresses and settings stay in local JSON.
 - Diagnostic collection is **on by default** to help improve reliability. Turn off **Settings → Diagnostics → Share diagnostic data** to stop collection.
 - Sanitized error/crash reports and sampled operation timings go to Sentry (US); passwords, server addresses, share paths and raw logs are not forwarded. Sentry processes the connection IP for transport; details and limitations are documented in [SENTRY.md](SENTRY.md).
+
+### Why different password prompts appear
+
+- **Server password:** enter it when adding/editing a server in NetMounter. It is stored in macOS Keychain and reused for manual, automatic and wake-recovery mounts. It is not your Mac login password.
+- **Keychain access/unlock:** macOS may ask permission to let NetMounter read a saved server password. This is a system authorization prompt; the app cannot bypass it or use the Keychain unlock password as a server password.
+- **NFS administrator authorization:** the default NFS mode does not request administrator authorization. Only the explicit reserved-source-port compatibility mode uses elevated privileges; administrator passwords are never stored by NetMounter.
+- Mounts created outside NetMounter have no app-owned credential reference. Add the server to NetMounter and save its password to use the same credential path; existing Finder/Keychain entries are not migrated or deleted automatically.
+
+### NFS permissions and compatibility
+
+- By default, NFS mounts use non-reserved source ports (`noresvport`) and a user-owned directory: `~/NetworkMounts/<server-id>/<export-name>`. The NAS must permit your client host and non-reserved source ports; mounting in a user directory does not bypass NAS export permissions.
+- Enable **NAS requires a reserved source port** in the server settings only if the NAS is confirmed to require it. This compatibility mode uses `/Volumes` and administrator privileges. Ordinary permission errors or connection failures do not automatically enable it or trigger elevation.
+- Saving a server never installs or authorizes a privileged helper. Manual reserved-port mounting can request administrator authorization. Automatic/wake mounting never prompts; use the separate **Authorize once for automatic NFS mounts…** button if you want that mode to run unattended.
+- That authorization installs a persistent passwordless NFS helper for your macOS user, not a permission restricted to NetMounter. Existing helpers are not removed, and ordinary-user mounts do not use them.
+- Existing connected volumes are reused, not moved or unmounted when the mode changes. The selected mode applies to the next mount after disconnection.
+
+For release builds, a stable code-signing identity helps preserve Keychain application identity across updates. The current ad-hoc distribution does not provide that assurance; adding support for an identity is not the same as signing/notarizing a release.
 
 ## 🛠️ Development
 
@@ -177,6 +195,15 @@ make dmg
 make clean
 ```
 
+
+To package with an explicitly selected signing identity (never auto-selected):
+
+```bash
+cd NetMounter
+NETMOUNTER_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" ./package_app.sh
+```
+
+The identity and private key must already be available to `codesign`. Omitting the variable keeps local ad-hoc signing. Notarization and matching Sentry dSYM upload remain separate release steps.
 
 ## 📄 License
 

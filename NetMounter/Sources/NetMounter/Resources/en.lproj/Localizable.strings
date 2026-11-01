@@ -40,7 +40,6 @@
 "The unused replacement password could not be removed from Keychain." = "The unused replacement password could not be removed from Keychain.";
 "A password is saved in Keychain. Leave this field blank to keep it." = "A password is saved in Keychain. Leave this field blank to keep it.";
 "Remove saved password when saving" = "Remove saved password when saving";
-"Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again." = "Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again.";
 "Check server reachability" = "Check server reachability";
 "Server port is reachable. Account and share access have not been verified." = "Server port is reachable. Account and share access have not been verified.";
 "Server port is unreachable. Check the address, network, and server service." = "Server port is unreachable. Check the address, network, and server service.";
@@ -49,8 +48,6 @@
 "Could not save" = "Could not save";
 "Configuration saved" = "Configuration saved";
 "The configuration is saved, but the old password could not be removed from Keychain." = "The configuration is saved, but the old password could not be removed from Keychain.";
-"NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize." = "NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize.";
-"Could not install the NFS helper. Your configuration was not saved. Try saving again." = "Could not install the NFS helper. Your configuration was not saved. Try saving again.";
 "Configuration update" = "Configuration update";
 "The server was removed, but its password could not be removed from Keychain." = "The server was removed, but its password could not be removed from Keychain.";
 "Retry" = "Retry";
@@ -75,3 +72,29 @@
 "Enabled by default; you can turn this off. Sends crash reports, error codes, app/OS versions and operation timing to Sentry in the US. Passwords, usernames, server addresses, share paths and MAC addresses are excluded. Sentry processes the connection IP address; IP and inferred location are scrubbed on the server. Turning this off stops new collection and attempts to delete the local diagnostic cache. Reports already queued may still be delivered; reports already sent cannot be recalled." = "Enabled by default; you can turn this off. Sends crash reports, error codes, app/OS versions and operation timing to Sentry in the US. Passwords, usernames, server addresses, share paths and MAC addresses are excluded. Sentry processes the connection IP address; IP and inferred location are scrubbed on the server. Turning this off stops new collection and attempts to delete the local diagnostic cache. Reports already queued may still be delivered; reports already sent cannot be recalled.";
 "Send diagnostic test" = "Send diagnostic test";
 "Diagnostic test queued. Delivery depends on network availability." = "Diagnostic test queued. Delivery depends on network availability.";
+
+/* Unified server credentials */
+"macOS could not validate this application while reading Keychain. Use a trusted, consistently signed build. Your saved password has not been changed." = "macOS could not validate this application while reading Keychain. Use a trusted, consistently signed build. Your saved password has not been changed.";
+"Enter the server password once. It is saved in Keychain and reused when connecting." = "Enter the server password once. It is saved in Keychain and reused when connecting.";
+
+/* NFS user mounts and reserved-port compatibility */
+"NAS requires a reserved source port" = "NAS requires a reserved source port";
+"Enable only if your NAS requires reserved source ports. These mounts use /Volumes and require administrator authorization. Saving does not authorize." = "Enable only if your NAS requires reserved source ports. These mounts use /Volumes and require administrator authorization. Saving does not authorize.";
+"The installed NFS helper is used for reserved-port mounts." = "The installed NFS helper is used for reserved-port mounts.";
+"Authorizing installs a persistent passwordless NFS helper for your macOS user. It is not restricted to this app." = "Authorizing installs a persistent passwordless NFS helper for your macOS user. It is not restricted to this app.";
+"Authorize once for automatic NFS mounts…" = "Authorize once for automatic NFS mounts…";
+"NFS mounts in ~/NetworkMounts without administrator authorization. The NAS must allow non-reserved source ports." = "NFS mounts in ~/NetworkMounts without administrator authorization. The NAS must allow non-reserved source ports.";
+"Could not authorize NFS mounting" = "Could not authorize NFS mounting";
+"Could not install the NFS helper. You can still save the server configuration without authorizing." = "Could not install the NFS helper. You can still save the server configuration without authorizing.";
+"Reserved-port NFS mounting needs administrator authorization. Open the server settings and authorize automatic NFS mounts, or disable reserved-port mode if the NAS allows it." = "Reserved-port NFS mounting needs administrator authorization. Open the server settings and authorize automatic NFS mounts, or disable reserved-port mode if the NAS allows it.";
+
+// Classified NFS failures; never include raw tool output.
+"NFS mount failed (exit status %d). %@" = "NFS mount failed (exit status %d). %@";
+"The NFS tool did not provide a recognized failure reason. Check the NAS export permissions and connection; do not enable reserved-port mode based on the exit status alone." = "The NFS tool did not provide a recognized failure reason. Check the NAS export permissions and connection; do not enable reserved-port mode based on the exit status alone.";
+"macOS or the NFS server denied permission. Check mount-directory ownership and NAS export/client permissions. Reserved-port mode requires administrator authorization and should only be enabled if the NAS requires it." = "macOS or the NFS server denied permission. Check mount-directory ownership and NAS export/client permissions. Reserved-port mode requires administrator authorization and should only be enabled if the NAS requires it.";
+"The NFS export or local mount directory was not found. Check the export path and mount directory." = "The NFS export or local mount directory was not found. Check the export path and mount directory.";
+"The NFS request timed out. Check the network, firewall and NAS NFS service." = "The NFS request timed out. Check the network, firewall and NAS NFS service.";
+"The NFS service could not be reached. Check the server address, network, firewall and NAS NFS service." = "The NFS service could not be reached. Check the server address, network, firewall and NAS NFS service.";
+"The NFS tool rejected its arguments. This may be an application or helper compatibility problem, not a server-password error." = "The NFS tool rejected its arguments. This may be an application or helper compatibility problem, not a server-password error.";
+"macOS did not authorize the reserved-port NFS tool. Review NFS administrator authorization in the server settings, or disable reserved-port mode if the NAS allows it." = "macOS did not authorize the reserved-port NFS tool. Review NFS administrator authorization in the server settings, or disable reserved-port mode if the NAS allows it.";
+"NFS administrator authorization was cancelled. No server password was changed." = "NFS administrator authorization was cancelled. No server password was changed.";

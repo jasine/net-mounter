@@ -64,6 +64,32 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertFalse(DiagnosticFailure(MountError.authenticationFailed).expected)
     }
 
+    func testNotificationDenialAndPropagatedKeychainCancellationAreExpected() {
+        let denied = DiagnosticFailure(NSError(domain: "UNErrorDomain", code: 1))
+        XCTAssertEqual(denied.family, "notification")
+        XCTAssertTrue(denied.expected)
+        XCTAssertFalse(DiagnosticFailure(NSError(domain: "unrelated-domain", code: 1)).expected)
+        XCTAssertFalse(DiagnosticFailure(NSError(domain: "UNErrorDomain", code: 2)).expected)
+        XCTAssertTrue(DiagnosticFailure(MountError.keychainReadFailed(-128)).expected)
+        XCTAssertFalse(DiagnosticFailure(MountError.keychainReadFailed(-67049)).expected)
+        XCTAssertEqual(DiagnosticFailure(UnmountError.toolFailed(1)).code, 1)
+        XCTAssertFalse(DiagnosticFailure(UnmountError.toolFailed(1)).expected)
+    }
+
+    func testNFSExitStatusesAreWhitelistedSeparatelyFromMountErrnoAndAuthorization() {
+        let failure = DiagnosticFailure(MountError.nfsMountFailed(13))
+        XCTAssertEqual(failure.family, "nfs_mount")
+        XCTAssertEqual(failure.code, 13)
+        XCTAssertFalse(failure.expected)
+        XCTAssertTrue(DiagnosticFailure.families.contains(failure.family))
+        XCTAssertFalse(MountError.nfsMountFailed(13).isAuthError)
+        let authorization = DiagnosticFailure(MountError.nfsAuthorizationRequired)
+        XCTAssertEqual(authorization.family, "nfs_authorization")
+        XCTAssertEqual(authorization.code, 0)
+        XCTAssertTrue(authorization.expected)
+        XCTAssertTrue(DiagnosticFailure.families.contains(authorization.family))
+    }
+
     func testMeasurementCompletesOnlyOnceEvenAcrossThreads() {
         let lock = NSLock()
         var count = 0

@@ -23,6 +23,8 @@ class AutoMountService: ObservableObject {
     // Track servers mounted via VPN route so we can unmount on VPN disconnect
     private var vpnMountedServerIDs: Set<UUID> = []
 
+    private(set) var isSuspendedForSleep = false
+
     // Dedup: avoid double-evaluation when SleepWakeManager and subscription both fire
     private var lastEvaluation: (fingerprint: NetworkFingerprint, uptime: TimeInterval)?
 
@@ -41,7 +43,7 @@ class AutoMountService: ObservableObject {
              ConnectionTester.shared.checkReachability(host: host, port: port, completion: completion)
          },
          mountServer: @escaping MountAction = { config, silent, completion in
-             MountingManager.shared.mount(config: config, silent: silent, completion: completion)
+             MountingManager.shared.mount(config: config, silent: silent, automatic: true, completion: completion)
          }) {
         self.appState = appState
         self.networkMonitor = networkMonitor
@@ -100,6 +102,18 @@ class AutoMountService: ObservableObject {
             .store(in: &cancellables)
     }
 
+    func suspendForSleep() {
+        isSuspendedForSleep = true
+        lastEvaluation = nil
+        cancelAllRetries()
+    }
+
+    func resumeAfterWake() {
+        isSuspendedForSleep = false
+        lastEvaluation = nil
+        stoppedAutoMounts.removeAll()
+    }
+
     /// Reject queued snapshots whose target/credentials changed or whose rules were paused/deleted.
     static func currentEnabledServer(_ snapshot: ServerConfig, in servers: [ServerConfig]) -> ServerConfig? {
         servers.first {
@@ -111,7 +125,7 @@ class AutoMountService: ObservableObject {
     }
 
     private func eligibleServer(_ snapshot: ServerConfig) -> ServerConfig? {
-        guard !appState.isSavingServer,
+        guard !isSuspendedForSleep, !appState.isSavingServer,
               let fingerprint = networkMonitor.currentFingerprint,
               stoppedAutoMounts[snapshot.id] != fingerprint,
               let current = Self.currentEnabledServer(snapshot, in: appState.servers),
@@ -120,7 +134,7 @@ class AutoMountService: ObservableObject {
     }
 
     func evaluateAutoMount(for fingerprint: NetworkFingerprint) {
-        guard !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
+        guard !isSuspendedForSleep, !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if let last = lastEvaluation, last.fingerprint == fingerprint, now - last.uptime < 5.0 {
             logger.debug("Skipping duplicate evaluation for same fingerprint")
@@ -151,7 +165,7 @@ class AutoMountService: ObservableObject {
     }
 
     private func processAutoMount(servers: [ServerConfig], fingerprint: NetworkFingerprint, vpnResults: [String: Bool]) {
-        guard !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
+        guard !isSuspendedForSleep, !appState.isSavingServer, networkMonitor.currentFingerprint == fingerprint else { return }
         vpnMountedServerIDs.formIntersection(Set(servers.map(\.id)))
 
         for snapshot in servers {
@@ -181,7 +195,7 @@ class AutoMountService: ObservableObject {
     }
     
     private func performPeriodicHealthCheck() {
-        guard !appState.isSavingServer, let currentFingerprint = networkMonitor.currentFingerprint else {
+        guard !isSuspendedForSleep, !appState.isSavingServer, let currentFingerprint = networkMonitor.currentFingerprint else {
             logger.debug("No current network fingerprint available for periodic check.")
             return
         }
@@ -216,7 +230,7 @@ class AutoMountService: ObservableObject {
                             DispatchQueue.global(qos: .utility).async {
                                 MountingManager.shared.forceUnmount(path: path)
                                 DispatchQueue.main.async {
-                                    guard self.appState.servers.contains(where: { $0.id == current.id }) else { return }
+                                    guard self.eligibleServer(current) != nil else { return }
                                     self.appState.serverOperations[current.id] = .idle
                                     self.attemptMount(current, retryCount: 0, onSuccess: {
                                         NotificationService.shared.notifyZombieHealed(server: current)
@@ -265,7 +279,7 @@ class AutoMountService: ObservableObject {
                 }
                 switch result {
                 case .success(true):
-                    self.mountServer(current, retryCount > 0) { mountResult in
+                    self.mountServer(current, true) { mountResult in
                         DispatchQueue.main.async {
                             guard let saved = self.appState.servers.first(where: { $0.id == current.id }) else { return }
                             guard saved.mountURLString == current.mountURLString else {
@@ -285,7 +299,7 @@ class AutoMountService: ObservableObject {
                                     self.stoppedAutoMounts[current.id] = fingerprint
                                     NotificationService.shared.notifyMountFailed(server: current, retries: retryCount)
                                 } else {
-                                    self.scheduleRetry(for: current, currentRetryCount: retryCount)
+                                    self.scheduleRetry(for: current, currentRetryCount: retryCount, lastError: error)
                                 }
                             }
                         }
@@ -303,19 +317,12 @@ class AutoMountService: ObservableObject {
         }
     }
 
-    private func scheduleRetry(for snapshot: ServerConfig, currentRetryCount: Int) {
+    private func scheduleRetry(for snapshot: ServerConfig, currentRetryCount: Int, lastError: Error = ConnectionError.connectionFailed) {
         guard let server = eligibleServer(snapshot) else { return }
-        // NFS mounts require root — silent retries (without admin dialog) always fail
-        if server.serverProtocol == .nfs {
-            logger.info("NFS mount requires admin privileges, skipping silent retries for \(server.alias)")
-            NotificationService.shared.notifyMountFailed(server: server)
-            return
-        }
-
         let maxRetries = 5
         guard currentRetryCount < maxRetries else {
             DiagnosticsService.shared.begin(.retriesExhausted, protocolType: server.serverProtocol, automatic: true)
-                .finish(error: ConnectionError.connectionFailed)
+                .finish(error: lastError)
             logger.warning("Max retries reached for \(server.alias). Giving up.")
             stoppedAutoMounts[server.id] = networkMonitor.currentFingerprint
             NotificationService.shared.notifyMountFailed(server: server)

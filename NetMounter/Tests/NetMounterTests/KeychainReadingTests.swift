@@ -3,6 +3,28 @@ import XCTest
 @testable import NetMounter
 
 final class KeychainReadingTests: XCTestCase {
+    func testConcurrentReadsSerializeSystemAuthorization() {
+        let manager = KeychainManager()
+        let lock = NSLock()
+        var activeReads = 0
+        var maximumReads = 0
+        manager.copyPasswordItem = { _ in
+            lock.lock()
+            activeReads += 1
+            maximumReads = max(maximumReads, activeReads)
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.01)
+            lock.lock()
+            activeReads -= 1
+            lock.unlock()
+            return (errSecSuccess, Data("fixture-password".utf8) as NSData)
+        }
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            XCTAssertEqual(manager.readPassword(for: "fixture"), .success("fixture-password"))
+        }
+        XCTAssertEqual(maximumReads, 1, "System authorization must not overlap for multiple servers")
+    }
+
     func testReadPreservesKeychainFailureStatus() {
         let manager = KeychainManager()
         manager.copyPasswordItem = { _ in (errSecUserCanceled, nil) }

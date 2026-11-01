@@ -2,7 +2,6 @@
 import Foundation
 import Combine
 import AppKit
-import NetFS
 import Logging
 
 private let logger = Logger(label: "SleepWake")
@@ -11,17 +10,52 @@ class SleepWakeManager {
     private let appState: AppState
     private let networkMonitor: NetworkMonitor
     private let autoMountService: AutoMountService
+    private let captureMounts: ([ServerConfig]) -> [MountSnapshot]
+    private let unmount: (String, @escaping (Error?) -> Void) -> Void
+    private let forceUnmount: (String, @escaping () -> Void) -> Void
+    private let remount: (ServerConfig, @escaping (Result<String, Error>) -> Void) -> Void
+    private let remountUnmanaged: (URL, @escaping (Result<String, Error>) -> Void) -> Void
+    private let unmountTimeout: TimeInterval
+    private let wakeTimeout: TimeInterval
 
     private var sleepSnapshot: [MountSnapshot] = []
+    private var sleepPreparation = DispatchGroup()
     private var isAwaitingReconnect = false
+    private var wakeGeneration = UUID()
     private var wakeCancellable: AnyCancellable?
     private var wakeTimeoutWork: DispatchWorkItem?
 
-    init(appState: AppState, networkMonitor: NetworkMonitor, autoMountService: AutoMountService) {
+    init(appState: AppState, networkMonitor: NetworkMonitor, autoMountService: AutoMountService,
+         observeWorkspace: Bool = true, unmountTimeout: TimeInterval = 3, wakeTimeout: TimeInterval = 30,
+         captureMounts: @escaping ([ServerConfig]) -> [MountSnapshot] = {
+             MountingManager.shared.getAllNetworkMounts(matching: $0)
+         },
+         unmount: @escaping (String, @escaping (Error?) -> Void) -> Void = { path, done in
+             MountingManager.shared.unmount(mountPath: path, completion: done)
+         },
+         forceUnmount: @escaping (String, @escaping () -> Void) -> Void = { path, done in
+             DispatchQueue.global(qos: .utility).async {
+                 MountingManager.shared.forceUnmount(path: path)
+                 DispatchQueue.main.async(execute: done)
+             }
+         },
+         remount: @escaping (ServerConfig, @escaping (Result<String, Error>) -> Void) -> Void = { config, done in
+             MountingManager.shared.mount(config: config, silent: true, automatic: true, completion: done)
+         },
+         remountUnmanaged: @escaping (URL, @escaping (Result<String, Error>) -> Void) -> Void = { url, done in
+             MountingManager.shared.remountUnmanaged(url: url, completion: done)
+         }) {
         self.appState = appState
         self.networkMonitor = networkMonitor
         self.autoMountService = autoMountService
-        subscribeToSleepWake()
+        self.captureMounts = captureMounts
+        self.unmount = unmount
+        self.forceUnmount = forceUnmount
+        self.remount = remount
+        self.remountUnmanaged = remountUnmanaged
+        self.unmountTimeout = unmountTimeout
+        self.wakeTimeout = wakeTimeout
+        if observeWorkspace { subscribeToSleepWake() }
     }
 
     private func subscribeToSleepWake() {
@@ -32,165 +66,141 @@ class SleepWakeManager {
                            name: NSWorkspace.didWakeNotification, object: nil)
     }
 
-    // MARK: - Sleep
+    @objc private func handleWillSleep(_ notification: Notification) { prepareForSleep() }
+    @objc private func handleDidWake(_ notification: Notification) { reconnectAfterWake() }
 
-    @objc private func handleWillSleep(_ notification: Notification) {
+    func prepareForSleep() {
+        cancelWakeWait()
+        autoMountService.suspendForSleep()
         DiagnosticsService.shared.breadcrumb(.sleep)
-        logger.info("System will sleep — snapshotting and unmounting network volumes")
-
-        sleepSnapshot = MountingManager.shared.getAllNetworkMounts(matching: appState.servers)
-        logger.info("Snapshot captured: \(self.sleepSnapshot.count) network volume(s)")
-
-        guard !sleepSnapshot.isEmpty else { return }
-
-        let group = DispatchGroup()
-        let perVolumeTimeout: TimeInterval = 3.0
-
+        sleepSnapshot = captureMounts(appState.servers)
+        let group = sleepPreparation
         for snapshot in sleepSnapshot {
             group.enter()
-            unmountWithTimeout(path: snapshot.volumePath, timeout: perVolumeTimeout) {
-                group.leave()
-            }
+            unmountWithTimeout(path: snapshot.volumePath) { group.leave() }
         }
-
-        // Block until all unmounts finish or 5s overall timeout
-        let result = group.wait(timeout: .now() + 5.0)
-        if result == .timedOut {
-            logger.warning("Overall unmount timeout — force unmounting remaining volumes")
-            for snapshot in sleepSnapshot {
-                forceUnmount(path: snapshot.volumePath)
-            }
-        }
-
-        logger.info("Sleep preparation complete")
+        // Unmount completion is delivered on main. Waiting here would block that completion
+        // and force-unmount volumes that have already been gracefully unmounted.
+        group.notify(queue: .main) { logger.info("Sleep unmount preparation complete") }
     }
 
-    // MARK: - Wake
-
-    @objc private func handleDidWake(_ notification: Notification) {
+    func reconnectAfterWake() {
+        cancelWakeWait()
+        autoMountService.suspendForSleep()
         DiagnosticsService.shared.breadcrumb(.wake)
-        logger.info("System did wake — waiting for network")
-
-        guard !sleepSnapshot.isEmpty else {
-            logger.info("No snapshot to restore, skipping reconnect")
-            return
-        }
-
         isAwaitingReconnect = true
-
-        // Watch for network to become available
+        let generation = wakeGeneration
+        // Invalidate the cached fingerprint BEFORE subscribing to its current value.
+        networkMonitor.refreshAfterWake()
         wakeCancellable = networkMonitor.$currentFingerprint
             .compactMap { $0 }
-            .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] fingerprint in
-                self?.handleNetworkReady(fingerprint: fingerprint)
+                guard let self else { return }
+                self.sleepPreparation.notify(queue: .main) { [weak self] in
+                    guard let self, self.isAwaitingReconnect, self.wakeGeneration == generation else { return }
+                    guard self.networkMonitor.currentFingerprint == fingerprint else { return }
+                    self.handleNetworkReady(fingerprint: fingerprint)
+                }
             }
 
-        // Safety timeout — don't wait forever
         let timeoutWork = DispatchWorkItem { [weak self] in
-            guard let self = self, self.isAwaitingReconnect else { return }
-            DiagnosticsService.shared.begin(.wakeReconnect).finish(error: ConnectionError.timeout)
-            logger.warning("Wake network timeout (30s) — abandoning reconnect")
+            guard let self, self.isAwaitingReconnect, self.wakeGeneration == generation else { return }
+            DiagnosticsService.shared.begin(.wakeReconnect, automatic: true).finish(error: ConnectionError.timeout)
             let count = self.sleepSnapshot.count
+            self.sleepSnapshot = []
             self.cancelWakeWait()
-            if count > 0 {
-                NotificationService.shared.notifyWakeReconnectFailed(count: count)
+            // A later network update may retry; don't leave automatic mounting permanently suspended.
+            let resumeGeneration = self.wakeGeneration
+            self.sleepPreparation.notify(queue: .main) { [weak self] in
+                guard let self, self.wakeGeneration == resumeGeneration else { return }
+                self.autoMountService.resumeAfterWake()
+                if let fingerprint = self.networkMonitor.currentFingerprint {
+                    self.autoMountService.evaluateAutoMount(for: fingerprint)
+                }
             }
+            if count > 0 { NotificationService.shared.notifyWakeReconnectFailed(count: count) }
         }
         wakeTimeoutWork = timeoutWork
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0, execute: timeoutWork)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wakeTimeout, execute: timeoutWork)
     }
 
     private func handleNetworkReady(fingerprint: NetworkFingerprint) {
-        logger.info("Network ready after wake — restoring mounts")
+        let snapshots = sleepSnapshot
+        sleepSnapshot = []
         cancelWakeWait()
-
-        // Path 1: Managed servers — delegate to AutoMountService
+        autoMountService.resumeAfterWake()
         autoMountService.evaluateAutoMount(for: fingerprint)
 
-        // Path 2: Manual mounts — best-effort remount via remountURL
-        let manualMounts = sleepSnapshot.filter { $0.serverID == nil }
-        for snapshot in manualMounts {
-            remountManual(snapshot: snapshot)
+        for snapshot in snapshots {
+            if let id = snapshot.serverID {
+                guard let config = appState.servers.first(where: { $0.id == id }), snapshot.matches(config) else { continue }
+                // AutoMountService owns enabled rules, including VPN routing decisions.
+                guard !config.hasEnabledAutoMountRules else { continue }
+                restore(config: config)
+            } else if !appState.isSavingServer {
+                // Preserve the original URL/port, but suppress system login UI and discard URL passwords.
+                remountUnmanaged(snapshot.remountURL) { _ in }
+            }
         }
-
-        sleepSnapshot = []
     }
 
-    private func remountManual(snapshot: MountSnapshot) {
-        let diagnostic = DiagnosticsService.shared.begin(.wakeReconnect)
-        DispatchQueue.global(qos: .utility).async {
-            var mountpoints: Unmanaged<CFArray>?
-            let result = NetFSMountURLSync(
-                snapshot.remountURL as CFURL,
-                nil, nil, nil, nil, nil,
-                &mountpoints
-            )
-            diagnostic.finish(error: result == 0 ? nil : MountError.mountFailed(result))
-            if result == 0 {
-                logger.info("Restored manual mount: \(snapshot.volumePath)")
-            } else {
-                logger.debug("Could not restore manual mount \(snapshot.volumePath) (error \(result))")
+    private func restore(config: ServerConfig) {
+        guard !appState.isSavingServer, !(appState.serverOperations[config.id]?.isBusy ?? false) else { return }
+        appState.serverOperations[config.id] = .connecting
+        remount(config) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self,
+                      let current = self.appState.servers.first(where: { $0.id == config.id }),
+                      current.mountURLString == config.mountURLString else { return }
+                switch result {
+                case .success(let path): self.appState.serverOperations[config.id] = .mounted(path)
+                case .failure(let error):
+                    self.appState.serverOperations[config.id] = .failed(error.localizedDescription, mountPath: nil)
+                }
             }
         }
     }
 
     private func cancelWakeWait() {
         isAwaitingReconnect = false
+        wakeGeneration = UUID()
         wakeCancellable?.cancel()
         wakeCancellable = nil
         wakeTimeoutWork?.cancel()
         wakeTimeoutWork = nil
     }
 
-    // MARK: - Unmount Helpers
-
-    private func unmountWithTimeout(path: String, timeout: TimeInterval, completion: @escaping () -> Void) {
-        var completed = false
-        let lock = NSLock()
-
-        MountingManager.shared.unmount(mountPath: path) { error in
-            lock.lock()
-            guard !completed else { lock.unlock(); return }
-            completed = true
-            lock.unlock()
-
-            if let error = error {
-                logger.warning("Graceful unmount failed for \(path): \(error.localizedDescription)")
-                self.forceUnmount(path: path)
-            } else {
-                logger.info("Gracefully unmounted \(path)")
+    private func unmountWithTimeout(path: String, completion: @escaping () -> Void) {
+        // A force-unmount can finish before the original diskutil process exits.
+        // Wait for both without blocking main so a late request cannot unmount a restored volume.
+        let pending = DispatchGroup()
+        pending.enter()
+        var gracefulFinished = false
+        var fallbackStarted = false
+        let startFallback = { [weak self] in
+            guard let self, !fallbackStarted else { return }
+            fallbackStarted = true
+            pending.enter()
+            self.forceUnmount(path) {
+                DispatchQueue.main.async { pending.leave() }
             }
-            completion()
         }
-
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
-            lock.lock()
-            guard !completed else { lock.unlock(); return }
-            completed = true
-            lock.unlock()
-
-            logger.warning("Unmount timed out for \(path) — force unmounting")
-            self.forceUnmount(path: path)
-            completion()
+        let timeout = DispatchWorkItem {
+            guard !gracefulFinished else { return }
+            startFallback()
         }
-    }
-
-    private func forceUnmount(path: String) {
-        let diagnostic = DiagnosticsService.shared.begin(.forceUnmount)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-        process.arguments = ["unmount", "force", path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
-        } catch {
-            diagnostic.finish(error: error)
+        unmount(path) { error in
+            DispatchQueue.main.async {
+                guard !gracefulFinished else { return }
+                gracefulFinished = true
+                timeout.cancel()
+                if error != nil { startFallback() }
+                pending.leave()
+            }
         }
+        pending.notify(queue: .main, execute: completion)
+        DispatchQueue.main.asyncAfter(deadline: .now() + unmountTimeout, execute: timeout)
     }
 
     deinit {

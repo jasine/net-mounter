@@ -28,12 +28,27 @@
 | System integration | Privileged NFS helper installation, login item registration, notification authorization/delivery |
 | Native failure | Crash handler and uncaught NSException reporting, stack addresses and debug image UUIDs |
 
-- Handled failures are captured without sampling, but deduplicated by operation/family/code/protocol for 60 seconds, with at most 20 distinct error keys per minute per running app.
+- Handled failures are captured without sampling, but deduplicated by operation/family/code/protocol (plus NFS reason/tool when present) for 60 seconds, with at most 20 distinct error keys per minute per running app.
 - Manual root operation transactions are sampled at 20%. Automatic network, file, Core Data, UI and performance collectors are disabled.
-- Routine unreachable-host checks do not generate standalone issues. Expected cancellations and an already-mounted result (`EBUSY`) are suppressed as issues.
+- Routine unreachable-host checks do not generate standalone issues. Expected cancellations (including cancellation while reading a saved Keychain password), notification permission refusal (`UNErrorDomain` / `notificationsNotAllowed`), and an already-mounted result (`EBUSY`) are suppressed as issues. Notification authorization and delivery have separate operation names.
 - Diagnostics test bypasses error deduplication. Its DEBUG-only button reports that the test was **queued**, not that the server received it.
 - Error counts are **not** total failure counts because of deduplication/limits. No stable user identity is collected; Sentry's “users impacted” is not a reliable affected-user metric.
 - A handled-error stack identifies the capture/completion site, not necessarily the original throw site. Native crashes need matching symbols for useful code locations.
+
+## Recovery and error classification
+
+- Automatic mounts, including their first attempt and wake recovery, are tagged `trigger:automatic`; whether a system UI is suppressed is not used to infer the trigger.
+- NFS `mount_nfs`/helper process exit statuses use `nfs_mount`, not POSIX mount errno or server-password failures. Tool stderr is drained with a 16 KiB retention limit and converted to a closed reason; a truncated incomplete line is ignored. Raw output is then discarded, never logged or forwarded to Sentry. Only validated `nfs_reason` and `nfs_tool` values survive the sanitizer.
+- Missing authorization for explicit reserved-port automatic NFS mounting uses `nfs_authorization` and is expected, not a Sentry issue. Ordinary-user NFS mounting never falls back to privileged execution.
+- `diskutil` process exit statuses use the `diskutil` error family, not mount errno. In particular, exit status 1 does not establish a POSIX permission failure. An already-disappeared mount is an idempotent unmount success.
+- `EEXIST` is success only when the same source (protocol, host, effective port and full share/export path) is confirmed alive. Otherwise it stops automatic retries; stale cleanup failure also stops the mount attempt.
+- Retry exhaustion retains the final mount failure classification instead of replacing it with a generic connection error.
+- Keychain OSStatus `-67049` is `errSecCSBadObjectFormat`, not a wrong-password error. A signing/validation problem is a diagnostic lead, not a proven cause for every historical report; `-67050` is the distinct `errSecCSReqFailed` status. Neither causes the app to overwrite a saved password.
+- Packaging now uses the full app version as `CFBundleVersion` and accepts an explicit `NETMOUNTER_SIGNING_IDENTITY`. This does not uniquely identify two rebuilds of the same version; preserve and verify matching binary/dSYM UUIDs.
+
+Wake recovery waits for both the original unmount process and any force fallback to finish. If a system unmount tool remains hung, automatic recovery stays paused rather than starting a mount that the old request could later unmount. The app does not block the main thread or request a system sleep deferral.
+
+These changes require a new build to take effect. Isolated regression tests do not establish that real NAS mounts, physical sleep/wake, Keychain UI, or production native symbolication have been fixed.
 
 ## Privacy boundaries
 
@@ -91,3 +106,14 @@ No upload token is installed in this workspace and no dSYM was uploaded during i
 - Packaging removes debug-map build paths from the distributed executable only, before signing; the original build and dSYM are unchanged. Packaging regression tests check stripping arguments/order and preservation of the original binary.
 - Rebuilt the universal release app and inspected its DMG read-only: version 1.4.0, English/Chinese resources present, signature integrity valid, only system dynamic dependencies, no local user paths or dSYMs in the distributed bundle. Executable/dSYM UUIDs match for arm64 and x86_64.
 - Distribution remains ad-hoc signed and unnotarized. Sentry symbol upload is still pending because an upload token/CLI is unavailable; production symbolication and fatal-crash/relaunch acceptance are not claimed.
+
+
+## NFS diagnostics follow-up — 2026-11-01
+
+- Historical baseline: `NET-MOUNTER-D` (`mount`, `nfs_mount:1`) and `NET-MOUNTER-E` (`automount.exhausted`, `nfs_mount:1`), previously observed on 2026-10-28 UTC. Their exit status did not establish NAS export refusal, a reserved-port requirement, or a need for root privileges.
+- This session could not access authenticated Sentry issue/event tools. Events since `2026-10-28T17:38:00Z`, including new occurrences of existing issues, have **not** been reviewed. No issue has been resolved in Sentry.
+- Local changes distinguish permission, missing path, timeout, unreachable service, invalid arguments, tool authorization and cancellation, leaving unrecognized output as `unknown`. They do not infer errno from exit status or infer a wrong NAS password from a tool-authorization failure.
+- Unknown/network/timeout failures retain automatic retry. Recognized failures requiring user action stop automatic retries until an explicit retry or configuration change; automatic health checks do not resume them. Expected authorization requirements and cancellations do not become error issues.
+- NFS reason/tool participate in deduplication and grouping. Newly classified failures can create different issues from the historical D/E groups; lack of new events in D/E alone is not evidence of recovery.
+- Validation: 137 tests, 2 opt-in UI tests skipped, 0 failures; arm64/x86_64 Release build passed; English/Chinese string files passed plist validation. Synthetic subprocess tests exercise pipe draining beyond 16 KiB and truncation boundaries without invoking mounting or privilege escalation.
+- No running app was replaced, release published, symbols uploaded, helper installed, mount changed, or credentials/Keychain data modified. The current running local app is still labeled 1.4.0 and does not include this follow-up. Real NAS mounting, system authorization dialogs, new backend receipt and production symbolication remain unverified.

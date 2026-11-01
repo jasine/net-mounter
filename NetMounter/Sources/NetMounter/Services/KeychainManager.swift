@@ -8,15 +8,21 @@ class KeychainManager {
     static let shared = KeychainManager()
     
     // Service name for our app
+    private let accessLock = NSLock()
+
     private let service = "com.netmounter.service"
     
     func save(password: String, for account: String) -> String? {
+        // Serialize system authorization prompts without changing item access controls.
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let diagnostic = DiagnosticsService.shared.begin(.keychainSave)
         let passwordData = password.data(using: .utf8)!
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
+            kSecAttrLabel as String: "NetMounter server password",
             kSecValueData as String: passwordData
         ]
         
@@ -41,6 +47,9 @@ class KeychainManager {
     var copyPasswordItem: ((CFDictionary) -> (OSStatus, AnyObject?))?
 
     func readPassword(for account: String) -> Result<String, ReadError> {
+        // Serialize system authorization prompts without changing item access controls.
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let diagnostic = DiagnosticsService.shared.begin(.keychainRead)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -73,6 +82,9 @@ class KeychainManager {
 
     @discardableResult
     func delete(account: String) -> Bool {
+        // Serialize system authorization prompts without changing item access controls.
+        accessLock.lock()
+        defer { accessLock.unlock() }
         let diagnostic = DiagnosticsService.shared.begin(.keychainDelete)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

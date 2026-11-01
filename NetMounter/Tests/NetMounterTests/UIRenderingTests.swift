@@ -33,6 +33,16 @@ final class UIRenderingTests: XCTestCase {
         nfs.sharePath = "/volume1/media"
         nfs.keychainItemId = nil
         try capture(ServerDetailView(config: nfs).environmentObject(state), name: "nfs-server", size: NSSize(width: 380, height: 600), output: output)
+        try capture(ServerDetailView(config: nfs).environmentObject(state).environment(\.locale, Locale(identifier: "zh-Hans")),
+                    name: "nfs-server-zh", size: NSSize(width: 380, height: 600), output: output)
+        nfs.usesReservedNFSPort = true
+        try capture(ServerDetailView(config: nfs).environmentObject(state), name: "nfs-reserved-port", size: NSSize(width: 380, height: 600), output: output)
+        try capture(ServerDetailView(config: nfs).environmentObject(state).environment(\.locale, Locale(identifier: "zh-Hans")),
+                    name: "nfs-reserved-port-zh", size: NSSize(width: 380, height: 600), output: output)
+        try capture(ServerDetailView(config: nfs).environmentObject(state), name: "nfs-reserved-port-details",
+                    size: NSSize(width: 380, height: 600), output: output, scrollOffset: 300)
+        try capture(ServerDetailView(config: nfs).environmentObject(state).environment(\.locale, Locale(identifier: "zh-Hans")),
+                    name: "nfs-reserved-port-details-zh", size: NSSize(width: 380, height: 600), output: output, scrollOffset: 300)
         for (name, operation) in [("mount-failure", ServerOperation.failed("The server did not respond. Check your network, then retry.", mountPath: nil)),
                                    ("connecting", .connecting),
                                    ("unmount-failure", .failed("The volume is busy. Close any files using it, then retry.", mountPath: "/Volumes/fixture"))] {
@@ -103,13 +113,23 @@ final class UIRenderingTests: XCTestCase {
     }
 
     @MainActor
-    private func capture<V: View>(_ view: V, name: String, size: NSSize, output: URL) throws {
+    private func capture<V: View>(_ view: V, name: String, size: NSSize, output: URL, scrollOffset: CGFloat = 0) throws {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, .dark))
         host.frame = NSRect(origin: .zero, size: size)
         host.appearance = NSAppearance(named: .darkAqua)
         let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.contentView = host
         host.layoutSubtreeIfNeeded()
+        if scrollOffset > 0 {
+            func findScrollView(in view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView { return scroll }
+                return view.subviews.lazy.compactMap { findScrollView(in: $0) }.first
+            }
+            let scroll = try XCTUnwrap(findScrollView(in: host), "Form must be scrollable")
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: scrollOffset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.layoutSubtreeIfNeeded()
+        }
         guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             return XCTFail("No bitmap for \(name)")
         }

@@ -16,16 +16,10 @@ enum ServerConfigurationSaver {
 
     private enum SaveError: LocalizedError {
         case credentialWrite
-        case nfsAuthorizationCancelled
-        case nfsInstallation(String)
         case rollbackCleanup(String)
 
         var errorDescription: String? {
             switch self {
-            case .nfsAuthorizationCancelled:
-                return String(localized: "NFS setup authorization was cancelled. Your configuration was not saved. Save again to authorize.", bundle: .module)
-            case .nfsInstallation(let reason):
-                return String(localized: "Could not install the NFS helper. Your configuration was not saved. Try saving again.", bundle: .module) + "\n" + reason
             case .credentialWrite:
                 return String(localized: "Could not save the password to Keychain. Your previous configuration and password are unchanged.", bundle: .module)
             case .rollbackCleanup(let reason):
@@ -37,26 +31,10 @@ enum ServerConfigurationSaver {
     static func save(
         config: ServerConfig,
         passwordChange: PasswordChange,
-        isNFSHelperInstalled: () -> Bool = { PrivilegedMountInstaller.isInstalled() },
-        installNFSHelper: () async -> PrivilegedMountInstaller.InstallResult = {
-            await withCheckedContinuation { continuation in
-                PrivilegedMountInstaller.install { continuation.resume(returning: $0) }
-            }
-        },
         savePassword: (String, String) async -> String?,
         deletePassword: (String) async -> Bool,
         persist: (ServerConfig) -> Result<Void, Error>
     ) async -> Result<Outcome, Error> {
-        if config.serverProtocol == .nfs && !isNFSHelperInstalled() {
-            switch await installNFSHelper() {
-            case .installed: break
-            case .cancelled:
-                return .failure(SaveError.nfsAuthorizationCancelled)
-            case .failed(let reason):
-                return .failure(SaveError.nfsInstallation(reason))
-            }
-        }
-
         var candidate = config
         let oldID = config.keychainItemId
         var stagedID: String?

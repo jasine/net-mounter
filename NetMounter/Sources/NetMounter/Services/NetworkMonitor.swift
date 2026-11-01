@@ -12,16 +12,18 @@ class NetworkMonitor: ObservableObject {
     @Published var currentPath: NWPath?
     @Published var currentFingerprint: NetworkFingerprint?
     
-    private let monitor = NWPathMonitor()
+    private var monitor: NWPathMonitor?
+    private var monitorGeneration = UUID()
     private let queue = DispatchQueue(label: "NetworkMonitor")
     private var cancellables = Set<AnyCancellable>()
-    private let pathSubject = PassthroughSubject<NWPath, Never>()
+    private let pathSubject = PassthroughSubject<(path: NWPath, generation: UUID), Never>()
     
     init(startMonitoring: Bool = true) {
         if startMonitoring { self.startMonitoring() }
     }
     
     func startMonitoring() {
+        guard monitor == nil else { return }
         // Setup the pipeline:
         // 1. Receive path update
         // 2. Debounce to avoid rapid fluctuations (e.g. signal changes)
@@ -31,17 +33,33 @@ class NetworkMonitor: ObservableObject {
         pathSubject
             .debounce(for: .milliseconds(500), scheduler: queue)
             .sink { [weak self] path in
-                self?.processPathUpdate(path)
+                self?.processPathUpdate(path.path, generation: path.generation)
             }
             .store(in: &cancellables)
             
-        monitor.pathUpdateHandler = { [weak self] path in
-            self?.pathSubject.send(path)
+        restartPathMonitor()
+    }
+
+    /// Restarting NWPathMonitor yields an initial path, even if the network is unchanged.
+    /// Old asynchronous gateway lookups cannot publish into the new generation.
+    func refreshAfterWake() {
+        currentFingerprint = nil
+        if monitor != nil { restartPathMonitor() }
+    }
+
+    private func restartPathMonitor() {
+        monitor?.cancel()
+        let generation = UUID()
+        monitorGeneration = generation
+        let next = NWPathMonitor()
+        monitor = next
+        next.pathUpdateHandler = { [weak self] path in
+            self?.pathSubject.send((path, generation))
         }
-        monitor.start(queue: queue)
+        next.start(queue: queue)
     }
     
-    private func processPathUpdate(_ path: NWPath) {
+    private func processPathUpdate(_ path: NWPath, generation: UUID) {
         var ssid: String? = nil
         let bssid: String? = nil
         var interfaceType: InterfaceType = .other
@@ -62,7 +80,7 @@ class NetworkMonitor: ObservableObject {
         // If we are disconnected
         if path.status != .satisfied {
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
+                guard let self = self, self.monitorGeneration == generation else { return }
                 self.currentPath = path
                 if self.currentFingerprint != nil {
                     self.currentFingerprint = nil
@@ -80,20 +98,20 @@ class NetworkMonitor: ObservableObject {
                     ssid: ssid, bssid: bssid,
                     gatewayMac: gatewayMac, interfaceType: interfaceType
                 )
-                self?.publishFingerprint(fingerprint, path: path)
+                self?.publishFingerprint(fingerprint, path: path, generation: generation)
             }
         } else {
             let fingerprint = NetworkFingerprint(
                 ssid: ssid, bssid: bssid,
                 gatewayMac: nil, interfaceType: interfaceType
             )
-            publishFingerprint(fingerprint, path: path)
+            publishFingerprint(fingerprint, path: path, generation: generation)
         }
     }
 
-    private func publishFingerprint(_ fingerprint: NetworkFingerprint, path: NWPath) {
+    private func publishFingerprint(_ fingerprint: NetworkFingerprint, path: NWPath, generation: UUID) {
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.monitorGeneration == generation else { return }
             self.currentPath = path
             if self.currentFingerprint != fingerprint {
                 self.currentFingerprint = fingerprint
@@ -102,6 +120,8 @@ class NetworkMonitor: ObservableObject {
             }
         }
     }
+
+    deinit { monitor?.cancel() }
 
     static func resolveCommand(_ candidates: [String]) -> String? {
         candidates.first { FileManager.default.fileExists(atPath: $0) }

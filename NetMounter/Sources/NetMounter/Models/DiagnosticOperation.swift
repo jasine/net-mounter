@@ -30,6 +30,7 @@ enum DiagnosticOperation: String, CaseIterable {
     case keychainDelete = "keychain.delete"
     case nfsHelper = "nfs.helper.install"
     case loginItem = "settings.login_item"
+    case notificationAuthorization = "notification.authorization"
     case notification = "notification.delivery"
     case verification = "diagnostics.verification"
 }

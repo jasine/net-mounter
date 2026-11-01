@@ -1,5 +1,7 @@
 import Foundation
 import NetFS
+import Darwin
+import Security
 import Logging
 
 private let logger = Logger(label: "MountingManager")
@@ -13,6 +15,8 @@ enum MountError: LocalizedError, Equatable {
     case cancellationFailed(Int32)
     case authenticationRequired
     case authenticationFailed
+    case nfsMountFailed(Int32, reason: NFSMountFailureReason = .unknown, tool: NFSMountTool = .mountNFS)
+    case nfsAuthorizationRequired
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +31,8 @@ enum MountError: LocalizedError, Equatable {
             return "Missing share name. Enter the share/export path for this server."
         case .timedOut:
             return String(localized: "Mount timed out while waiting for macOS or the server. Automatic retries are paused; try mounting again manually.", bundle: .module)
+        case .keychainReadFailed(let status) where status == errSecCSBadObjectFormat || status == errSecCSReqFailed:
+            return String(localized: "macOS could not validate this application while reading Keychain. Use a trusted, consistently signed build. Your saved password has not been changed.", bundle: .module)
         case .keychainReadFailed:
             return String(localized: "The saved password could not be read from Keychain. Allow access, unlock Keychain, or save the password again.", bundle: .module)
         case .cancellationFailed:
@@ -35,6 +41,10 @@ enum MountError: LocalizedError, Equatable {
             return "Authentication required. Please add credentials."
         case .authenticationFailed:
             return "Authentication failed."
+        case .nfsMountFailed(let status, let reason, _):
+            return String(format: String(localized: "NFS mount failed (exit status %d). %@", bundle: .module), status, reason.message)
+        case .nfsAuthorizationRequired:
+            return String(localized: "Reserved-port NFS mounting needs administrator authorization. Open the server settings and authorize automatic NFS mounts, or disable reserved-port mode if the NAS allows it.", bundle: .module)
         }
     }
 
@@ -54,10 +64,24 @@ enum MountError: LocalizedError, Equatable {
     /// a target that can never mount).
     var isNonRetryable: Bool {
         switch self {
-        case .invalidShare, .invalidURL, .timedOut, .keychainReadFailed, .cancellationFailed:
+        case .invalidShare, .invalidURL, .timedOut, .keychainReadFailed, .cancellationFailed, .nfsAuthorizationRequired:
             return true
+        case .mountFailed(let code) where code == EEXIST:
+            return true
+        case .nfsMountFailed(_, let reason, _):
+            return reason.isNonRetryable
         default:
             return isAuthError
+        }
+    }
+}
+
+enum UnmountError: LocalizedError, Equatable {
+    case toolFailed(Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .toolFailed(let status): return "diskutil could not unmount the volume (exit status \(status))."
         }
     }
 }
@@ -91,6 +115,15 @@ class MountingManager {
         KeychainManager.shared.readPassword(for: $0)
     }
 
+    /// Read-only probes and tool execution are injectable for isolated regression tests.
+    var networkMounts: (() -> [MountSnapshot])?
+    var mountAlive: ((String) -> Bool)?
+    var mountedPaths: (() -> Set<String>)?
+    var runUnmountTool: (([String]) -> Error?)?
+    var runNFSMountTool: ((String, [String]) throws -> NFSMountToolResult)?
+    var nfsHomeDirectory = FileManager.default.homeDirectoryForCurrentUser
+    var isNFSHelperInstalled: () -> Bool = { PrivilegedMountInstaller.isInstalled() }
+
     /// Starts after Keychain authorization, not while waiting for the user's response.
     var netFSMountTimeout: TimeInterval = 30.0
 
@@ -112,8 +145,8 @@ class MountingManager {
         inflightMounts.remove(serverID)
     }
 
-    func mount(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
-        let diagnostic = DiagnosticsService.shared.begin(.mount, protocolType: config.serverProtocol, automatic: silent)
+    func mount(config: ServerConfig, silent: Bool = false, automatic: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+        let diagnostic = DiagnosticsService.shared.begin(.mount, protocolType: config.serverProtocol, automatic: automatic)
         let complete: (Result<String, Error>) -> Void = { result in
             if case .failure(let error) = result { diagnostic.finish(error: error) }
             else { diagnostic.finish() }
@@ -121,9 +154,45 @@ class MountingManager {
         }
         switch config.serverProtocol {
         case .nfs:
-            mountNFS(config: config, silent: silent, completion: complete)
+            mountNFS(config: config, silent: silent || automatic, completion: complete)
         case .smb, .afp, .webdav:
             mountNetFS(config: config, silent: silent, completion: complete)
+        }
+    }
+
+    /// Finder/other unmanaged mounts have no app-owned credential reference. Reuse
+    /// session/guest authentication without importing URL passwords or showing NetFS login UI.
+    func remountUnmanaged(url: URL, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let protocolType = NetworkProtocol.allCases.first(where: {
+            $0.scheme == url.scheme || ($0 == .webdav && url.scheme == "http")
+        }), let host = url.host,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            DispatchQueue.main.async { completion(.failure(MountError.invalidURL)) }
+            return
+        }
+        let config = ServerConfig(alias: "", serverProtocol: protocolType,
+            hostname: host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host,
+            sharePath: url.path, username: components.user)
+        components.user = nil
+        components.password = nil
+        guard let targetURL = components.url else {
+            DispatchQueue.main.async { completion(.failure(MountError.invalidURL)) }
+            return
+        }
+        let diagnostic = DiagnosticsService.shared.begin(.wakeReconnect, protocolType: protocolType, automatic: true)
+        let complete: (Result<String, Error>) -> Void = { result in
+            if case .failure(let error) = result { diagnostic.finish(error: error) } else { diagnostic.finish() }
+            completion(result)
+        }
+        if protocolType == .nfs {
+            // Unmanaged NFS has no configured reserved-port opt-in; never request elevation.
+            guard url.port == nil else {
+                DispatchQueue.main.async { complete(.failure(MountError.invalidURL)) }
+                return
+            }
+            mountNFS(config: config, silent: true, completion: complete)
+        } else {
+            mountNetFS(config: config, targetURL: targetURL, completion: complete)
         }
     }
 
@@ -137,17 +206,21 @@ class MountingManager {
     }
 
     func getAllNetworkMounts(matching servers: [ServerConfig]) -> [MountSnapshot] {
+        if let networkMounts { return networkMounts() }
         let keys: [URLResourceKey] = [.volumeURLForRemountingKey, .volumeIsLocalKey]
-        guard let mountedURLs = FileManager.default.mountedVolumeURLs(
+        let mountedURLs = FileManager.default.mountedVolumeURLs(
             includingResourceValuesForKeys: keys, options: []
-        ) else { return [] }
+        ) ?? []
 
         var snapshots: [MountSnapshot] = []
 
         for mountURL in mountedURLs {
             guard let values = try? mountURL.resourceValues(forKeys: Set(keys)) else { continue }
             if values.volumeIsLocal == true { continue }
-            guard let remountURL = values.volumeURLForRemounting else { continue }
+            guard let sourceURL = values.volumeURLForRemounting,
+                  var components = URLComponents(url: sourceURL, resolvingAgainstBaseURL: false) else { continue }
+            components.password = nil
+            guard let remountURL = components.url else { continue }
 
             let matchedServer = servers.first { MountSnapshot(serverID: nil, volumePath: mountURL.path, remountURL: remountURL).matches($0) }
             snapshots.append(MountSnapshot(
@@ -157,57 +230,99 @@ class MountingManager {
             ))
         }
 
+        // Resource values can be unavailable on a stale or renamed volume. The kernel
+        // mount source is a read-only fallback, never a guess based on /Volumes names.
+        for mount in Self.systemMounts() where !snapshots.contains(where: { $0.volumePath == mount.path }) {
+            guard let snapshot = Self.snapshot(path: mount.path, source: mount.source, fileSystem: mount.fileSystem) else { continue }
+            snapshots.append(MountSnapshot(serverID: servers.first(where: { snapshot.matches($0) })?.id,
+                                           volumePath: snapshot.volumePath, remountURL: snapshot.remountURL))
+        }
         return snapshots
+    }
+
+    private static func systemMounts() -> [(path: String, source: String, fileSystem: String)] {
+        var buffer: UnsafeMutablePointer<statfs>?
+        // Unlike getmntinfo's shared static buffer, this variant owns its result per call.
+        let count = getmntinfo_r_np(&buffer, MNT_NOWAIT)
+        guard let buffer else { return [] }
+        defer { free(buffer) }
+        guard count > 0 else { return [] }
+        return (0..<Int(count)).map { index in
+            let mount = buffer[index]
+            let path = withUnsafeBytes(of: mount.f_mntonname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            let source = withUnsafeBytes(of: mount.f_mntfromname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            let fileSystem = withUnsafeBytes(of: mount.f_fstypename) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            return (path, source, fileSystem)
+        }
+    }
+
+    static func snapshot(path: String, source: String, fileSystem: String) -> MountSnapshot? {
+        let url: URL?
+        switch fileSystem {
+        case "smbfs": url = URL(string: source.hasPrefix("//") ? "smb:" + source : source)
+        case "nfs":
+            guard let separator = source.range(of: ":/") else { return nil }
+            var host = String(source[..<separator.lowerBound])
+            if host.contains(":") && !host.hasPrefix("[") { host = "[\(host)]" }
+            url = URL(string: "nfs://\(host)" + String(source[separator.lowerBound...].dropFirst()))
+        default: return nil
+        }
+        guard let url, url.host != nil, !url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty else { return nil }
+        // A kernel source can include credentials. Keep only the non-secret remount URL.
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.password = nil
+        guard let remountURL = components.url else { return nil }
+        return MountSnapshot(serverID: nil, volumePath: path, remountURL: remountURL)
     }
 
     func unmount(mountPath: String, completion: @escaping (Error?) -> Void) {
         let diagnostic = DiagnosticsService.shared.begin(.unmount)
-        let complete: (Error?) -> Void = { error in
+        DispatchQueue.global(qos: .utility).async {
+            let error = self.unmountVolume(path: mountPath, force: false)
             diagnostic.finish(error: error)
-            completion(error)
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-            process.arguments = ["unmount", mountPath]
-
-            let errorPipe = Pipe()
-            process.standardError = errorPipe
-
-            do {
-                try process.run()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 {
-                    DispatchQueue.main.async { complete(nil) }
-                } else {
-                    let stderr = String(data: errorData, encoding: .utf8) ?? ""
-                    logger.error("diskutil unmount failed: \(stderr)")
-                    DispatchQueue.main.async { complete(MountError.mountFailed(process.terminationStatus)) }
-                }
-            } catch {
-                DispatchQueue.main.async { complete(error) }
-            }
+            DispatchQueue.main.async { completion(error) }
         }
     }
 
-    func forceUnmount(path: String) {
+    @discardableResult
+    func forceUnmount(path: String) -> Error? {
         let diagnostic = DiagnosticsService.shared.begin(.forceUnmount)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-        process.arguments = ["unmount", "force", path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-            diagnostic.finish(error: process.terminationStatus == 0 ? nil : MountError.mountFailed(process.terminationStatus))
-        } catch {
-            diagnostic.finish(error: error)
+        let error = unmountVolume(path: path, force: true)
+        diagnostic.finish(error: error)
+        return error
+    }
+
+    private func isVolumeMounted(at path: String) -> Bool {
+        if let mountedPaths { return mountedPaths().contains(path) }
+        return Self.systemMounts().contains { $0.path == path }
+    }
+
+    private func unmountVolume(path: String, force: Bool) -> Error? {
+        // Another unmount may already have succeeded. Never force a plain directory.
+        guard isVolumeMounted(at: path) else { return nil }
+        let arguments = force ? ["unmount", "force", path] : ["unmount", path]
+        let error: Error?
+        if let runUnmountTool {
+            error = runUnmountTool(arguments)
+        } else {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                error = process.terminationStatus == 0 ? nil : UnmountError.toolFailed(process.terminationStatus)
+            } catch let launchError { error = launchError }
         }
+        // A racing successful unmount makes a tool's nonzero exit harmless.
+        return isVolumeMounted(at: path) ? error : nil
     }
 
     // MARK: - SMB/AFP/WebDAV Mount via NetFS
 
-    private func mountNetFS(config: ServerConfig, silent: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+    private func mountNetFS(config: ServerConfig, silent: Bool = false, targetURL: URL? = nil, completion: @escaping (Result<String, Error>) -> Void) {
         // Reject un-mountable targets (e.g. smb://host with no share) before
         // touching NetFS — a server URL without a share cannot be mounted.
         guard config.isValidMountTarget else {
@@ -234,7 +349,7 @@ class MountingManager {
             DispatchQueue.main.async { completion(result) }
         }
 
-        guard let url = URL(string: config.mountURLString) else {
+        guard let url = targetURL ?? URL(string: config.mountURLString) else {
             wrappedCompletion(.failure(MountError.invalidURL), true)
             return
         }
@@ -249,7 +364,10 @@ class MountingManager {
                     wrappedCompletion(.success(existingPath), true)
                     return
                 }
-                self.forceUnmount(path: existingPath)
+                if let error = self.forceUnmount(path: existingPath) {
+                    wrappedCompletion(.failure(error), true)
+                    return
+                }
             }
 
             var password: String?
@@ -341,9 +459,9 @@ class MountingManager {
         return { NetFSMountURLCancel(requestID) }
     }
 
-    private static func noUIOptions() -> CFMutableDictionary {
+    static func noUIOptions() -> CFMutableDictionary {
         let dict = NSMutableDictionary()
-        dict["UIOption"] = "NoUI"
+        dict[kNAUIOptionKey] = kNAUIOptionNoUI
         return dict as CFMutableDictionary
     }
 
@@ -372,68 +490,107 @@ class MountingManager {
             DispatchQueue.main.async { completion(result) }
         }
 
-        if let existingPath = findExistingMountPath(for: url) {
-            if isMountAlive(existingPath) {
-                wrappedCompletion(.success(existingPath))
-                return
-            } else {
-                forceUnmount(path: existingPath)
-            }
-        }
-
-        let sharePath = "/\(cleanShare)"
-        let mountName = URL(fileURLWithPath: sharePath).lastPathComponent
-        let mountPoint = "/Volumes/\(mountName)"
-        let nfsSource = "\(config.hostname):\(sharePath)"
-
-        let mountProcess = Process()
-        let errorPipe = Pipe()
-
-        if PrivilegedMountInstaller.isInstalled() {
-            // Passwordless path: root-owned wrapper via `sudo -n` (non-interactive).
-            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            mountProcess.arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
-        } else {
-            // Fallback: prompt for admin password via osascript (pre-install behavior).
-            let shellCmd = "mkdir -p \(shellEscape(mountPoint)) && /sbin/mount_nfs -o resvport,noowners,nosuid,nodev -- \(shellEscape(nfsSource)) \(shellEscape(mountPoint))"
-            let escapedShellCmd = appleScriptEscape(shellCmd)
-            let script = silent
-                ? "do shell script \"\(escapedShellCmd)\""
-                : "do shell script \"\(escapedShellCmd)\" with administrator privileges"
-            mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            mountProcess.arguments = ["-e", script]
-        }
+        let nfsSource = "\(config.hostname):/\(cleanShare)"
 
         DispatchQueue.global(qos: .userInitiated).async {
-            mountProcess.standardError = errorPipe
-            do {
-                try mountProcess.run()
-            } catch {
-                wrappedCompletion(.failure(error))
-                return
+            if let existingPath = self.findExistingMountPath(for: url) {
+                if self.isMountAlive(existingPath) {
+                    wrappedCompletion(.success(existingPath))
+                    return
+                }
+                if let error = self.forceUnmount(path: existingPath) {
+                    wrappedCompletion(.failure(error))
+                    return
+                }
             }
 
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            mountProcess.waitUntilExit()
-
-            if mountProcess.terminationStatus == 0 {
-                wrappedCompletion(.success(mountPoint))
-            } else {
-                let stderr = String(data: errorData, encoding: .utf8) ?? ""
-                logger.error("NFS mount failed: \(stderr)")
-                wrappedCompletion(.failure(MountError.mountFailed(mountProcess.terminationStatus)))
+            do {
+                let mountPoint: String
+                let executable: String
+                let arguments: [String]
+                let tool: NFSMountTool
+                if config.usesReservedNFSPort {
+                    mountPoint = "/Volumes/\(URL(fileURLWithPath: cleanShare).lastPathComponent)"
+                    guard !self.isVolumeMounted(at: mountPoint) else { throw MountError.mountFailed(EEXIST) }
+                    if self.isNFSHelperInstalled() {
+                        executable = "/usr/bin/sudo"
+                        tool = .sudo
+                        arguments = ["-n", PrivilegedMountInstaller.wrapperScriptPath, mountPoint, nfsSource]
+                    } else {
+                        guard !silent else {
+                            wrappedCompletion(.failure(MountError.nfsAuthorizationRequired))
+                            return
+                        }
+                        // Only the explicit reserved-port opt-in permits an administrator prompt.
+                        let command = "mkdir -p \(self.shellEscape(mountPoint)) && /sbin/mount_nfs -o resvport,noowners,nosuid,nodev -- \(self.shellEscape(nfsSource)) \(self.shellEscape(mountPoint))"
+                        executable = "/usr/bin/osascript"
+                        tool = .appleScript
+                        arguments = ["-e", "do shell script \"\(self.appleScriptEscape(command))\" with administrator privileges"]
+                    }
+                } else {
+                    mountPoint = try Self.prepareNFSUserMountPoint(config: config, homeDirectory: self.nfsHomeDirectory,
+                                                                 isMounted: self.isVolumeMounted(at:))
+                    executable = "/sbin/mount_nfs"
+                    tool = .mountNFS
+                    arguments = ["-o", "noresvport,noowners,nosuid,nodev", "--", nfsSource, mountPoint]
+                }
+                let result: NFSMountToolResult
+                if let run = self.runNFSMountTool {
+                    result = try run(executable, arguments)
+                } else {
+                    result = try NFSMountToolResult.run(executable: executable, arguments: arguments, tool: tool)
+                }
+                if result.status == 0 {
+                    wrappedCompletion(.success(mountPoint))
+                } else {
+                    logger.error("NFS mount failed: tool=\(tool.rawValue), status=\(result.status), reason=\(result.reason.rawValue)")
+                    wrappedCompletion(.failure(MountError.nfsMountFailed(result.status, reason: result.reason, tool: tool)))
+                }
+            } catch {
+                wrappedCompletion(.failure(error))
             }
         }
     }
 
+    /// Each server gets its own directory so exports with the same basename do not collide.
+    /// Refuse symlinks, other owners and nonempty mount points instead of covering user files.
+    static func prepareNFSUserMountPoint(config: ServerConfig, homeDirectory: URL,
+                                        isMounted: (String) -> Bool = { path in systemMounts().contains { $0.path == path } }) throws -> String {
+        guard config.isValidMountTarget else { throw MountError.invalidShare }
+        let base = homeDirectory.appendingPathComponent("NetworkMounts", isDirectory: true)
+        let server = base.appendingPathComponent(config.id.uuidString, isDirectory: true)
+        let mountPoint = server.appendingPathComponent(URL(fileURLWithPath: config.normalizedSharePath).lastPathComponent, isDirectory: true)
+        let manager = FileManager.default
+        for directory in [base, server, mountPoint] {
+            // Check the kernel mount table before touching a possibly disconnected volume.
+            guard !isMounted(directory.path) else { throw MountError.mountFailed(EEXIST) }
+            var info = stat()
+            if lstat(directory.path, &info) != 0 {
+                guard errno == ENOENT else { throw CocoaError(.fileWriteNoPermission) }
+                try manager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                guard lstat(directory.path, &info) == 0 else { throw CocoaError(.fileWriteNoPermission) }
+            }
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR), info.st_uid == getuid() else {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        }
+        guard try manager.contentsOfDirectory(atPath: mountPoint.path).isEmpty else {
+            throw MountError.mountFailed(EEXIST)
+        }
+        return mountPoint.path
+    }
+
     func isMountAlive(_ path: String) -> Bool {
+        if let mountAlive { return mountAlive(path) }
         var isAlive = false
+        let lock = NSLock()
         let semaphore = DispatchSemaphore(value: 0)
 
         DispatchQueue.global(qos: .background).async {
-            if FileManager.default.isReadableFile(atPath: path) {
-                isAlive = true
-            }
+            let readable = FileManager.default.isReadableFile(atPath: path)
+            lock.lock()
+            isAlive = readable
+            lock.unlock()
             semaphore.signal()
         }
 
@@ -441,6 +598,8 @@ class MountingManager {
         if result == .timedOut {
             return false
         }
+        lock.lock()
+        defer { lock.unlock() }
         return isAlive
     }
 }

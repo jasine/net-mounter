@@ -4,6 +4,7 @@ set -euo pipefail
 # Configuration
 APP_NAME="NetMounter"
 VERSION="${1:-1.4.0}"
+SIGNING_IDENTITY="${NETMOUNTER_SIGNING_IDENTITY:--}"
 BUILD_DIR=".build/apple/Products/Release"
 BINARY_PATH="$BUILD_DIR/$APP_NAME"
 RESOURCE_BUNDLE_PATH="$BUILD_DIR/${APP_NAME}_${APP_NAME}.bundle"
@@ -64,7 +65,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key>
     <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>${VERSION##*.}</string>
+    <string>$VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
@@ -91,9 +92,14 @@ EOF
 #     cp "AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
 # fi
 
-# Ad-hoc Code Sign to allow running locally
+# An explicit, stable identity preserves Keychain application trust across releases.
+# Default remains ad-hoc for local development; never auto-select a user's certificate.
 echo "Signing App..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+if [ "$SIGNING_IDENTITY" = "-" ]; then
+    codesign --force --deep --sign - "$APP_BUNDLE"
+else
+    codesign --force --deep --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+fi
 
 echo "Done! App created at $APP_BUNDLE"
 echo "You can move this to /Applications to install it."

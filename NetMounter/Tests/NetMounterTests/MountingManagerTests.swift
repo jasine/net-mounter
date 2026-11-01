@@ -4,12 +4,136 @@ import XCTest
 
 final class MountingManagerTests: XCTestCase {
 
+    func testUnmanagedWakePreservesPortAndStripsURLCredentials() {
+        let manager = MountingManager()
+        manager.networkMounts = { [] }
+        manager.readPassword = { _ in XCTFail("No app-owned credential reference exists"); return .failure(.status(-50)) }
+        manager.performNetFSMount = { url, username, password, done in
+            XCTAssertEqual(url.port, 1445)
+            XCTAssertEqual(url.host, "nas.invalid")
+            XCTAssertNil(url.user)
+            XCTAssertNil(url.password)
+            XCTAssertEqual(username, "fixture-user")
+            XCTAssertNil(password, "A URL password must not be imported into the credential flow")
+            done(.success("/Volumes/fixture")); return { 0 }
+        }
+        let done = expectation(description: "Unmanaged wake")
+        manager.remountUnmanaged(url: URL(string: "smb://fixture-user:fixture-secret@nas.invalid:1445/share")!) { result in
+            if case .failure = result { XCTFail("Expected injected mount success") }
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 1)
+    }
+
+    func testSavedPasswordIsPassedSeparatelyFromTheMountURL() {
+        let manager = MountingManager()
+        manager.networkMounts = { [] }
+        let config = ServerConfig(alias: "Fixture", hostname: "nas.invalid", sharePath: "share",
+                                  username: "fixture-user", keychainItemId: "fixture-key")
+        manager.readPassword = { _ in .success("fixture-secret") }
+        manager.performNetFSMount = { url, username, password, done in
+            XCTAssertNil(url.user)
+            XCTAssertNil(url.password)
+            XCTAssertFalse(url.absoluteString.contains("fixture-secret"))
+            XCTAssertEqual(username, "fixture-user")
+            XCTAssertEqual(password, "fixture-secret")
+            done(.success("/Volumes/fixture"))
+            return { 0 }
+        }
+        let completed = expectation(description: "Credential-backed mount")
+        manager.mount(config: config, silent: true, automatic: true) { result in
+            if case .failure(let error) = result { XCTFail("Unexpected failure: \(error)") }
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 1)
+        let options = MountingManager.noUIOptions() as NSDictionary
+        XCTAssertEqual(options["UIOption"] as? String, "NoUI")
+    }
+
+    func testEEXISTUsesConfirmedSourceOrStopsAutomaticRetries() {
+        let manager = MountingManager()
+        let config = ServerConfig(alias: "Fixture", hostname: "nas.invalid", sharePath: "share")
+        manager.networkMounts = { [] }
+        manager.performNetFSMount = { _, _, _, done in
+            done(.failure(EEXIST)); return { 0 }
+        }
+        let failed = expectation(description: "Unconfirmed conflict")
+        manager.mount(config: config) { result in
+            XCTAssertEqual(result.failure as? MountError, .mountFailed(EEXIST))
+            XCTAssertTrue((result.failure as? MountError)?.isNonRetryable ?? false)
+            failed.fulfill()
+        }
+        wait(for: [failed], timeout: 1)
+        manager.performNetFSMount = { _, _, _, done in
+            manager.networkMounts = {
+                [MountSnapshot(serverID: nil, volumePath: "/Volumes/renamed-fixture",
+                               remountURL: URL(string: "smb://nas.invalid/share")!)]
+            }
+            done(.failure(EEXIST)); return { 0 }
+        }
+        manager.mountAlive = { _ in true }
+        let mounted = expectation(description: "Confirmed same-source mount")
+        manager.mount(config: config) { result in
+            if case .success(let path) = result { XCTAssertEqual(path, "/Volumes/renamed-fixture") }
+            else { XCTFail("Expected existing mount success") }
+            mounted.fulfill()
+        }
+        wait(for: [mounted], timeout: 1)
+    }
+
+    func testUnmountIsIdempotentAndToolExitOneIsNotAnAuthenticationError() {
+        let manager = MountingManager()
+        var mounted = false
+        manager.mountedPaths = { mounted ? ["/Volumes/fixture"] : [] }
+        var runs = 0
+        manager.runUnmountTool = { _ in runs += 1; return UnmountError.toolFailed(1) }
+        XCTAssertNil(manager.forceUnmount(path: "/Volumes/fixture"))
+        XCTAssertEqual(runs, 0)
+        mounted = true
+        XCTAssertEqual(manager.forceUnmount(path: "/Volumes/fixture") as? UnmountError, .toolFailed(1))
+        XCTAssertEqual(DiagnosticFailure(UnmountError.toolFailed(1)).family, "diskutil")
+        manager.runUnmountTool = { _ in mounted = false; return UnmountError.toolFailed(1) }
+        XCTAssertNil(manager.forceUnmount(path: "/Volumes/fixture"), "A racing successful unmount is harmless")
+    }
+
+    func testFailedStaleUnmountStopsBeforeStartingNetFS() {
+        let manager = MountingManager()
+        let config = ServerConfig(alias: "Fixture", hostname: "nas.invalid", sharePath: "share")
+        manager.networkMounts = {
+            [MountSnapshot(serverID: nil, volumePath: "/Volumes/fixture", remountURL: URL(string: config.mountURLString)!)]
+        }
+        manager.mountAlive = { _ in false }
+        manager.mountedPaths = { ["/Volumes/fixture"] }
+        manager.runUnmountTool = { _ in UnmountError.toolFailed(1) }
+        manager.performNetFSMount = { _, _, _, _ in XCTFail("Failed cleanup must stop remounting"); return { 0 } }
+        let done = expectation(description: "Cleanup failed")
+        manager.mount(config: config) { result in
+            XCTAssertEqual(result.failure as? UnmountError, .toolFailed(1))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 1)
+    }
+
+    func testKernelMountSourceFallbackDoesNotGuessByDirectoryOrRetainPasswords() {
+        let smb = MountingManager.snapshot(path: "/Volumes/share-1", source: "//fixture:secret@nas.invalid/share", fileSystem: "smbfs")
+        XCTAssertTrue(smb?.matches(URL(string: "smb://nas.invalid/share")!) ?? false)
+        XCTAssertNil(smb?.remountURL.password)
+        let nfs = MountingManager.snapshot(path: "/Volumes/share", source: "nas.invalid:/exports/share", fileSystem: "nfs")
+        XCTAssertTrue(nfs?.matches(URL(string: "nfs://nas.invalid/exports/share")!) ?? false)
+        let ipv6 = MountingManager.snapshot(path: "/Volumes/share", source: "[2001:db8::1]:/exports/folder:/share", fileSystem: "nfs")
+        XCTAssertTrue(ipv6?.matches(URL(string: "nfs://[2001:db8::1]/exports/folder:/share")!) ?? false)
+        XCTAssertNil(MountingManager.snapshot(path: "/Volumes/share", source: "/dev/disk1", fileSystem: "apfs"))
+    }
+
     func testFindExistingMountPath_matchesMountSourceNotLocalDirectoryName() {
         let cases: [(String, String, String, String, String?)] = [
             ("suffixed mount", "smb://192.168.1.2/media", "/Volumes/media-1", "smb://jasine@192.168.1.2/media", "/Volumes/media-1"),
             ("renamed mount", "smb://192.168.1.2/media", "/Volumes/NAS Media", "smb://192.168.1.2/media", "/Volumes/NAS Media"),
             ("different host", "smb://192.168.1.2/media", "/Volumes/media", "smb://192.168.1.3/media", nil),
             ("different protocol", "smb://192.168.1.2/media", "/Volumes/media", "afp://192.168.1.2/media", nil),
+            ("different port", "smb://nas.invalid/media", "/Volumes/media", "smb://nas.invalid:1445/media", nil),
+            ("explicit default port", "smb://nas.invalid/media", "/Volumes/media", "smb://nas.invalid:445/media", "/Volumes/media"),
+            ("same custom port", "smb://nas.invalid:1445/media", "/Volumes/media", "smb://nas.invalid:1445/media", "/Volumes/media"),
             ("different share", "smb://192.168.1.2/media", "/Volumes/media", "smb://192.168.1.2/photos", nil),
             ("full NFS export", "nfs://192.168.1.2/volume1/docker", "/Volumes/docker-1", "nfs://192.168.1.2/volume1/docker", "/Volumes/docker-1"),
             ("different NFS export", "nfs://192.168.1.2/volume1/docker", "/Volumes/docker", "nfs://192.168.1.2/volume2/docker", nil),

@@ -145,6 +145,8 @@ final class DiagnosticsService {
             span.setData(value: duration * 1_000, key: "duration_ms")
             span.setTag(value: error == nil ? "success" : "failure", key: "outcome")
             self.breadcrumb(operation, outcome: error == nil ? "success" : "failure")
+            // Attach the error event with the operation's actual status, not the default "ok".
+            span.status = error == nil ? .ok : (failure?.expected == true ? .cancelled : .internalError)
             if let failure, reportFailure, !failure.expected {
                 self.capture(operation, failure: failure, duration: duration, protocolType: protocolType,
                              automatic: automatic, span: span)
@@ -155,7 +157,7 @@ final class DiagnosticsService {
 
     private func capture(_ operation: DiagnosticOperation, failure: DiagnosticFailure, duration: TimeInterval,
                          protocolType: NetworkProtocol?, automatic: Bool?, span: Span) {
-        let key = "\(operation.rawValue):\(failure.family):\(failure.code):\(protocolType?.rawValue ?? "none")"
+        let key = "\(operation.rawValue):\(failure.family):\(failure.code):\(protocolType?.rawValue ?? "none"):\(failure.nfsReason?.rawValue ?? "none"):\(failure.nfsTool?.rawValue ?? "none")"
         let now = ProcessInfo.processInfo.systemUptime
         lastFailures = lastFailures.filter { now - $0.value < 60 }
         if operation != .verification {
@@ -168,6 +170,8 @@ final class DiagnosticsService {
         event.message = SentryMessage(formatted: message)
         event.tags = ["operation": operation.rawValue, "error_family": failure.family,
                       "error_code": String(failure.code)]
+        if let reason = failure.nfsReason { event.tags?["nfs_reason"] = reason.rawValue }
+        if let tool = failure.nfsTool { event.tags?["nfs_tool"] = tool.rawValue }
         if let protocolType { event.tags?["protocol"] = protocolType.rawValue }
         if let automatic { event.tags?["trigger"] = automatic ? "automatic" : "manual" }
         event.fingerprint = [operation.rawValue, failure.family, String(failure.code), protocolType?.rawValue ?? "none"]
@@ -214,10 +218,16 @@ final class DiagnosticsService {
         if let value = tags["protocol"], NetworkProtocol(rawValue: value) != nil { safeTags["protocol"] = value }
         if let value = tags["trigger"], ["automatic", "manual"].contains(value) { safeTags["trigger"] = value }
         if let value = tags["outcome"], ["success", "failure"].contains(value) { safeTags["outcome"] = value }
+        if safeTags["error_family"] == "nfs_mount" {
+            if let value = tags["nfs_reason"], NFSMountFailureReason(rawValue: value) != nil { safeTags["nfs_reason"] = value }
+            if let value = tags["nfs_tool"], NFSMountTool(rawValue: value) != nil { safeTags["nfs_tool"] = value }
+        }
         event.tags = safeTags
         if let operation = safeTags["operation"], let family = safeTags["error_family"], let code = safeTags["error_code"] {
             event.message = SentryMessage(formatted: "\(operation) failed (\(family):\(code))")
             event.fingerprint = [operation, family, code, safeTags["protocol"] ?? "none"]
+            if let reason = safeTags["nfs_reason"] { event.fingerprint?.append(reason) }
+            if let tool = safeTags["nfs_tool"] { event.fingerprint?.append(tool) }
         } else {
             event.message = nil
             event.fingerprint = nil

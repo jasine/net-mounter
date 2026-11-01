@@ -8,6 +8,9 @@ final class PackagingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let result = try runPackaging(in: folder)
         XCTAssertEqual(result.status, 0, result.output)
+        let plistData = try Data(contentsOf: folder.appendingPathComponent("NetMounter.app/Contents/Info.plist"))
+        let info = try XCTUnwrap(PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any])
+        XCTAssertEqual(info["CFBundleVersion"] as? String, "1.4.0", "Do not collapse every x.y.0 release to build 0")
         let resources = folder.appendingPathComponent("NetMounter.app/Contents/Resources/NetMounter_NetMounter.bundle")
         let bundle = try XCTUnwrap(Bundle(url: resources))
         XCTAssertNotNil(bundle.url(forResource: "Localizable", withExtension: "strings", subdirectory: nil, localization: "en"))
@@ -16,6 +19,20 @@ final class PackagingTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("stripped-debug-paths").path))
         XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent(".build/apple/Products/Release/NetMounter")),
                        Data("fixture executable".utf8))
+    }
+
+    func testExplicitSigningIdentityIsOneArgumentAndDoesNotUseAdHocSigning() throws {
+        let folder = try makeFixture(includeResources: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let identity = "Developer ID Application: Fixture Organization (FIXTURE123)"
+        let result = try runPackaging(in: folder, signingIdentity: identity)
+        XCTAssertEqual(result.status, 0, result.output)
+        let args = try String(contentsOf: folder.appendingPathComponent("signing-arguments"))
+            .split(separator: "\n").map(String.init)
+        XCTAssertTrue(args.contains(identity))
+        XCTAssertTrue(args.contains("runtime"))
+        XCTAssertTrue(args.contains("--timestamp"))
+        XCTAssertFalse(args.contains("-"))
     }
 
     func testMissingResourcesFailsBeforeReplacingAnExistingApp() throws {
@@ -45,6 +62,7 @@ final class PackagingTests: XCTestCase {
         let codesign = bin.appendingPathComponent("codesign")
         try Data("""
         #!/bin/bash
+        printf '%s\\n' "$@" > signing-arguments
         for app in "$@"; do :; done
         test -d "$app/Contents/Resources/NetMounter_NetMounter.bundle" || exit 42
         test -f stripped-debug-paths || exit 44
@@ -66,7 +84,7 @@ final class PackagingTests: XCTestCase {
         return folder
     }
 
-    private func runPackaging(in folder: URL) throws -> (status: Int32, output: String) {
+    private func runPackaging(in folder: URL, signingIdentity: String = "-") throws -> (status: Int32, output: String) {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let process = Process()
@@ -74,6 +92,7 @@ final class PackagingTests: XCTestCase {
         process.arguments = [package.appendingPathComponent("package_app.sh").path]
         process.currentDirectoryURL = folder
         var environment = ProcessInfo.processInfo.environment
+        environment["NETMOUNTER_SIGNING_IDENTITY"] = signingIdentity
         environment["PATH"] = folder.appendingPathComponent("bin").path + ":/usr/bin:/bin"
         process.environment = environment
         let pipe = Pipe()

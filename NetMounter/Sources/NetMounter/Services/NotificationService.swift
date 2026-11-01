@@ -41,7 +41,7 @@ class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
         notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
-                DiagnosticsService.shared.begin(.notification).finish(error: error)
+                DiagnosticsService.shared.begin(.notificationAuthorization).finish(error: error)
                 logger.error("Notification auth error: \(error.localizedDescription)")
             } else if !granted {
                 logger.info("Notification permission denied by user")

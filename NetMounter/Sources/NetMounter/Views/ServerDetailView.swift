@@ -12,6 +12,9 @@ struct ServerDetailView: View {
     @State private var saveError: String?
     @State private var saveNotice: String?
     @State private var isNew: Bool
+    @State private var nfsHelperInstalled = PrivilegedMountInstaller.isInstalled()
+    @State private var isAuthorizingNFS = false
+    @State private var nfsAuthorizationError: String?
     
     init(config: ServerConfig? = nil, isNew: Bool? = nil) {
         if let existing = config {
@@ -76,14 +79,45 @@ struct ServerDetailView: View {
                                 Toggle(isOn: $removeSavedPassword) {
                                     Text("Remove saved password when saving", bundle: .module)
                                 }
+                            } else {
+                                Text("Enter the server password once. It is saved in Keychain and reused when connecting.", bundle: .module)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
 
-                        if config.serverProtocol == .nfs && !PrivilegedMountInstaller.isInstalled() {
-                            Text("Saving sets up a persistent NFS helper with one-time administrator authorization. Later mounts will not ask again.", bundle: .module)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                        if config.serverProtocol == .nfs {
+                            Toggle(isOn: $config.usesReservedNFSPort) {
+                                Text("NAS requires a reserved source port", bundle: .module)
+                            }
+                            if config.usesReservedNFSPort {
+                                Text("Enable only if your NAS requires reserved source ports. These mounts use /Volumes and require administrator authorization. Saving does not authorize.", bundle: .module)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if nfsHelperInstalled {
+                                    Text("The installed NFS helper is used for reserved-port mounts.", bundle: .module)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Authorizing installs a persistent passwordless NFS helper for your macOS user. It is not restricted to this app.", bundle: .module)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Button(action: authorizeNFSMounts) {
+                                        HStack(spacing: 6) {
+                                            if isAuthorizingNFS { ProgressView().controlSize(.small) }
+                                            Text("Authorize once for automatic NFS mounts…", bundle: .module)
+                                        }
+                                    }
+                                    .disabled(appState.isSavingServer)
+                                }
+                            } else {
+                                Text("NFS mounts in ~/NetworkMounts without administrator authorization. The NAS must allow non-reserved source ports.", bundle: .module)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
 
@@ -186,7 +220,7 @@ struct ServerDetailView: View {
                     }
                 }
                 .formStyle(.grouped)
-                .disabled(isSaving)
+                .disabled(isSaving || isAuthorizingNFS)
                 .scrollContentBackground(.hidden)
 
                 Divider()
@@ -195,7 +229,7 @@ struct ServerDetailView: View {
                         presentationMode.wrappedValue.dismiss()
                     } label: { Text("Cancel", bundle: .module) }
                     .keyboardShortcut(.cancelAction)
-                    .disabled(isSaving)
+                    .disabled(isSaving || isAuthorizingNFS)
                     Spacer()
                     Button(action: save) {
                         HStack(spacing: 6) {
@@ -204,13 +238,13 @@ struct ServerDetailView: View {
                         }
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(config.validationMessage != nil || isSaving || appState.isSavingServer)
+                    .disabled(config.validationMessage != nil || isSaving || isAuthorizingNFS || appState.isSavingServer)
                 }
                 .padding(12)
             }
         }
         .frame(width: 380, height: 600)
-        .interactiveDismissDisabled(isSaving)
+        .interactiveDismissDisabled(isSaving || isAuthorizingNFS)
         .onChange(of: config.hostname) { reachability.reset() }
         .onChange(of: config.serverProtocol) { reachability.reset() }
         .onChange(of: config.sharePath) { reachability.reset() }
@@ -218,6 +252,11 @@ struct ServerDetailView: View {
         .onChange(of: password) { reachability.reset() }
         .onChange(of: removeSavedPassword) { reachability.reset() }
         .onDisappear { reachability.reset() }
+        .alert(String(localized: "Could not authorize NFS mounting", bundle: .module), isPresented: Binding(
+            get: { nfsAuthorizationError != nil }, set: { if !$0 { nfsAuthorizationError = nil } }
+        )) {
+            Button("OK", role: .cancel) { nfsAuthorizationError = nil }
+        } message: { Text(nfsAuthorizationError ?? "") }
         .alert(String(localized: "Could not save", bundle: .module), isPresented: Binding(
             get: { saveError != nil }, set: { if !$0 { saveError = nil } }
         )) {
@@ -266,8 +305,28 @@ struct ServerDetailView: View {
         }
     }
 
+    private func authorizeNFSMounts() {
+        guard config.serverProtocol == .nfs, config.usesReservedNFSPort,
+              !isAuthorizingNFS, !isSaving, !appState.isSavingServer else { return }
+        isAuthorizingNFS = true
+        appState.isSavingServer = true
+        let appDelegate = NSApp.delegate as? AppDelegate
+        appDelegate?.preventPopoverClose = true
+        PrivilegedMountInstaller.install { result in
+            isAuthorizingNFS = false
+            appState.isSavingServer = false
+            appDelegate?.preventPopoverClose = false
+            switch result {
+            case .installed: nfsHelperInstalled = true
+            case .cancelled: break
+            case .failed:
+                nfsAuthorizationError = String(localized: "Could not install the NFS helper. You can still save the server configuration without authorizing.", bundle: .module)
+            }
+        }
+    }
+
     private func save() {
-        guard config.validationMessage == nil, !isSaving, !appState.isSavingServer else { return }
+        guard config.validationMessage == nil, !isSaving, !isAuthorizingNFS, !appState.isSavingServer else { return }
         isSaving = true
         appState.isSavingServer = true
         let appDelegate = NSApp.delegate as? AppDelegate

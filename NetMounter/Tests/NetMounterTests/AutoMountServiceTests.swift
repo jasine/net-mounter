@@ -10,6 +10,40 @@ final class AutoMountServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testSleepRejectsQueuedReachabilityAndFirstAutomaticMountIsSilent() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let state = AppState(configURL: folder.appendingPathComponent("config.json"))
+        let network = NetworkMonitor(startMonitoring: false)
+        let fingerprint = NetworkFingerprint(ssid: "Fixture", interfaceType: .wifi)
+        network.currentFingerprint = fingerprint
+        let config = ServerConfig(alias: "Fixture", hostname: "nas.invalid", sharePath: "share",
+            autoMountRules: [AutoMountRule(fingerprint: fingerprint)], wolMACAddress: "00:11:22:33:44:55")
+        try state.addServer(config).get()
+        var callback: ((Result<Bool, Error>) -> Void)?
+        var mounts = 0
+        let service = AutoMountService(appState: state, networkMonitor: network,
+            checkReachability: { _, _, done in callback = done },
+            mountServer: { _, silent, done in
+                XCTAssertTrue(silent, "Even the first automatic attempt must not prompt for admin login")
+                mounts += 1; done(.success("/Volumes/fixture"))
+            })
+        service.attemptMount(config)
+        service.suspendForSleep()
+        callback?(.success(true))
+        await drainCallbacks()
+        service.attemptMount(config)
+        XCTAssertEqual(mounts, 0)
+        XCTAssertEqual(state.serverOperations[config.id], .idle)
+        service.resumeAfterWake()
+        service.attemptMount(config)
+        callback?(.success(true))
+        await drainCallbacks()
+        XCTAssertEqual(mounts, 1)
+    }
+
+    @MainActor
     func testPausedRuleRejectsAnOutstandingReachabilityCallback() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -85,7 +119,9 @@ final class AutoMountServiceTests: XCTestCase {
 
     @MainActor
     func testTerminalFailuresDoNotRestartFromHealthChecks() async throws {
-        for error in [MountError.timedOut, .cancellationFailed(5), .keychainReadFailed(-25308)] {
+        let nfsErrors = [NFSMountFailureReason.permissionDenied, .notFound, .invalidOptions, .authorizationRequired, .cancelled]
+            .map { MountError.nfsMountFailed(1, reason: $0) }
+        for error in [MountError.timedOut, .cancellationFailed(5), .keychainReadFailed(-25308), .mountFailed(EEXIST)] + nfsErrors {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: folder) }
@@ -147,6 +183,40 @@ final class AutoMountServiceTests: XCTestCase {
         XCTAssertFalse(state.serverOperations[config.id]?.isBusy ?? true)
     }
 
+
+    @MainActor
+    func testNFSRetryBudgetAppliesToBothOrdinaryAndReservedPortModes() async throws {
+        for reservedPort in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let state = AppState(configURL: folder.appendingPathComponent("config.json"))
+            let network = NetworkMonitor(startMonitoring: false)
+            let fingerprint = NetworkFingerprint(ssid: "Test network", interfaceType: .wifi)
+            network.currentFingerprint = fingerprint
+            var config = ServerConfig(alias: "NAS", serverProtocol: .nfs, hostname: "nas.invalid", sharePath: "media",
+                                      autoMountRules: [AutoMountRule(fingerprint: fingerprint)])
+            config.usesReservedNFSPort = reservedPort
+            try state.addServer(config).get()
+            var mounts = 0
+            let service = AutoMountService(appState: state, networkMonitor: network,
+                checkReachability: { _, _, callback in callback(.success(true)) },
+                mountServer: { _, silent, callback in
+                    XCTAssertTrue(silent)
+                    mounts += 1
+                    callback(.failure(MountError.nfsMountFailed(32)))
+                })
+            service.attemptMount(config, retryCount: 5)
+            await drainCallbacks()
+            await drainCallbacks()
+            XCTAssertEqual(mounts, 1)
+            service.attemptMount(config)
+            await drainCallbacks()
+            await drainCallbacks()
+            XCTAssertEqual(mounts, 1, "NFS must respect the same exhausted retry budget, not skip its bookkeeping")
+            XCTAssertFalse(state.serverOperations[config.id]?.isBusy ?? true)
+        }
+    }
 
     @MainActor
     func testNetworkAndConfigurationChangesAllowANewAttempt() async throws {
